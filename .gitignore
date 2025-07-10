@@ -1,11 +1,1 @@
 /target/
-
-cargo_nih_plug
-nih_plug_derive
-nih_plug_iced
-nih_plug_vizia
-nih_plug_xtask
-plugins
-src
-target
-xtask

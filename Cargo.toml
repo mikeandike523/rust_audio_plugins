@@ -13,10 +13,6 @@ repository = "https://github.com/robbert-vdh/nih-plug"
 [workspace]
 resolver = "2"
 members = [
-
-  "custom_plugins/nxo",
-
-
   "nih_plug_derive",
   "nih_plug_egui",
   "nih_plug_iced",
@@ -48,6 +44,8 @@ members = [
   "plugins/puberty_simulator",
   "plugins/safety_limiter",
   "plugins/spectral_compressor",
+
+  "custom_plugins/harmonic_nxo"
 ]
 
 [features]
