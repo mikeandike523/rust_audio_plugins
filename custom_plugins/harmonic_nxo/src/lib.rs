@@ -1,8 +1,8 @@
 mod ADSR;
-use ADSR::{Adsr};
+use ADSR::{Adsr, CurveType};
 
 use nih_plug::prelude::*;
-use std::{sync::Arc, collections::VecDeque, num::NonZeroU32};
+use std::{collections::{HashMap, VecDeque}, sync::Arc, num::NonZeroU32};
 
 const MAX_VOICES: usize = 16;
 
@@ -10,19 +10,29 @@ const MAX_VOICES: usize = 16;
 struct SynthParams {
     #[id = "gain"]
     pub gain: FloatParam,
+
+    #[id = "attack"]
+    pub attack: FloatParam,
+    #[id = "decay"]
+    pub decay: FloatParam,
+    #[id = "sustain"]
+    pub sustain: FloatParam,
+    #[id = "release"]
+    pub release: FloatParam,
 }
 
 impl Default for SynthParams {
     fn default() -> Self {
         Self {
-            gain: FloatParam::new(
-                "Gain",
-                -10.0,
-                FloatRange::Linear { min: -30.0, max: 0.0 }
-            )
-            .with_smoother(SmoothingStyle::Linear(3.0))
-            .with_step_size(0.01)
-            .with_unit(" dB"),
+            gain: FloatParam::new("Gain", -10.0, FloatRange::Linear { min: -30.0, max: 0.0 })
+                .with_smoother(SmoothingStyle::Linear(3.0))
+                .with_step_size(0.01)
+                .with_unit(" dB"),
+
+            attack: FloatParam::new("Attack", 0.01, FloatRange::Skewed { min: 0.001, max: 2.0, factor: 0.5 }),
+            decay: FloatParam::new("Decay", 0.05, FloatRange::Skewed { min: 0.001, max: 2.0, factor: 0.5 }),
+            sustain: FloatParam::new("Sustain", 0.7, FloatRange::Linear { min: 0.0, max: 1.0 }),
+            release: FloatParam::new("Release", 0.1, FloatRange::Skewed { min: 0.001, max: 2.0, factor: 0.5 }),
         }
     }
 }
@@ -37,22 +47,31 @@ struct Voice {
 }
 
 impl Voice {
-    pub fn new(sr: f32) -> Self {
+    pub fn new(sr: f32, params: &SynthParams) -> Self {
         Self {
             note_id: 0,
             freq: 0.0,
             phase: 0.0,
             sample_rate: sr,
-            // e.g. alpha_a=0.01, alpha_d=0.05, sustain=0.7, alpha_r=0.1
-            env: Adsr::new(0.01, 0.05, 0.7, 0.1),
+            env: Adsr::new(
+                params.attack.value(),
+                params.decay.value(),
+                params.sustain.value(),
+                params.release.value(),
+                sr,
+                CurveType::Exponential,
+            ),
             start_ts: 0,
         }
     }
 
-    pub fn trigger(&mut self, note: u8, _velocity: f32, timestamp: u64) {
-        // velocity can modulate env amplitude if desired
+    pub fn trigger(&mut self, note: u8, _velocity: f32, timestamp: u64, params: &SynthParams) {
         self.note_id = note;
         self.freq = util::midi_note_to_freq(note);
+        self.env.set_attack_time(params.attack.value());
+        self.env.set_decay_time(params.decay.value());
+        self.env.set_sustain_level(params.sustain.value());
+        self.env.set_release_time(params.release.value());
         self.env.trigger();
         self.start_ts = timestamp;
     }
@@ -70,43 +89,47 @@ impl Voice {
     }
 
     pub fn is_released_and_done(&self) -> bool {
-        self.env.is_idle()
+        self.env.is_finished()
+    }
+
+    pub fn get_amplitude(&self) -> f32 {
+        self.env.get_level()
     }
 }
 
-pub struct PolySynth {
+pub struct HarmonicNxo {
     params: Arc<SynthParams>,
     sample_rate: f32,
     voices: Vec<Voice>,
+    active_voices: HashMap<u8, usize>,
     queue: VecDeque<usize>,
     ts: u64,
 }
 
-impl Default for PolySynth {
+impl Default for HarmonicNxo {
     fn default() -> Self {
         Self {
             params: Arc::new(SynthParams::default()),
             sample_rate: 44100.0,
             voices: Vec::new(),
+            active_voices: HashMap::new(),
             queue: VecDeque::new(),
             ts: 0,
         }
     }
 }
 
-impl Plugin for PolySynth {
+impl Plugin for HarmonicNxo {
     const NAME: &'static str = "Harmonic NXO";
     const VENDOR: &'static str = "WTH Plugins";
     const URL: &'static str = "";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        AudioIOLayout {
-            main_input_channels: None,
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        }
-    ];
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
+        main_input_channels: None,
+        main_output_channels: NonZeroU32::new(2),
+        ..AudioIOLayout::const_default()
+    }];
     const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
     type SysExMessage = ();
@@ -125,76 +148,74 @@ impl Plugin for PolySynth {
         self.sample_rate = config.sample_rate;
         true
     }
+fn process(
+    &mut self,
+    buffer: &mut Buffer,
+    _aux: &mut AuxiliaryBuffers,
+    context: &mut impl ProcessContext<Self>
+) -> ProcessStatus {
+    let mut events = Vec::new();
+    while let Some(evt) = context.next_event() {
+        events.push(evt);
+    }
 
-    fn process(
-        &mut self,
-        buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>
-    ) -> ProcessStatus {
-        // Collect events once per block
-        let mut events = Vec::new();
-        while let Some(evt) = context.next_event() {
-            events.push(evt);
-        }
+    for (sample_id, mut channels) in buffer.iter_samples().enumerate() {
+        self.ts = self.ts.wrapping_add(1);
 
-        for (sample_id, channels) in buffer.iter_samples().enumerate() {
-            self.ts = self.ts.wrapping_add(1);
-
-            // Handle events scheduled for this sample
-            for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
-                match evt {
-                    NoteEvent::NoteOn { note, velocity, .. } => {
-                        // allocate or steal voice
-                        let idx = if self.voices.len() < MAX_VOICES {
-                            self.voices.push(Voice::new(self.sample_rate));
-                            let i = self.voices.len() - 1;
-                            self.queue.push_back(i);
-                            i
-                        } else {
-                            // find a finished release-phase voice
-                            if let Some((i, _)) = self.voices.iter().enumerate()
-                                .filter(|(_,v)| v.is_released_and_done())
-                                .min_by_key(|(_,v)| v.start_ts)
-                            {
-                                i
-                            } else {
-                                // steal oldest active
-                                *self.queue.front().unwrap()
-                            }
-                        };
-                        // update queue order (move to back)
-                        self.queue.retain(|&i| i != idx);
-                        self.queue.push_back(idx);
-                        // trigger
-                        self.voices[idx].trigger(*note, *velocity, self.ts);
-                    }
-                    NoteEvent::NoteOff { note, .. } => {
-                        if let Some(i) = self.voices.iter().position(|v| v.note_id == *note) {
-                            self.voices[i].release();
-                        }
-                    }
-                    _ => {}
+        for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
+            match evt {
+                NoteEvent::NoteOn { note, velocity, .. } => {
+                    self.note_garbage_collection();
+                    let idx = if self.voices.len() < MAX_VOICES {
+                        self.voices.push(Voice::new(self.sample_rate, &self.params));
+                        let i = self.voices.len() - 1;
+                        self.queue.push_back(i);
+                        i
+                    } else {
+                        self.voices.iter().enumerate()
+                            .min_by(|(_, a), (_, b)| a.get_amplitude().partial_cmp(&b.get_amplitude()).unwrap())
+                            .map(|(i, _)| i)
+                            .unwrap_or(0)
+                    };
+                    self.queue.retain(|&i| i != idx);
+                    self.queue.push_back(idx);
+                    self.voices[idx].trigger(*note, *velocity, self.ts, &self.params);
+                    self.active_voices.insert(*note, idx);
                 }
-            }
-
-            // sum all voices
-            let mut out_sample = 0.0;
-            for v in &mut self.voices {
-                out_sample += v.next_sample() * util::db_to_gain_fast(self.params.gain.smoothed.next());
-            }
-
-            // write same sample to all channels
-            for s in channels {
-                *s = out_sample;
+                NoteEvent::NoteOff { note, .. } => {
+                    if let Some(&i) = self.active_voices.get(note) {
+                        self.voices[i].release();
+                    }
+                }
+                _ => {}
             }
         }
 
-        ProcessStatus::KeepAlive
+        let mut out_sample = 0.0;
+        for v in &mut self.voices {
+            let voice_sample = v.next_sample();
+            if voice_sample != 0.0 {
+                out_sample += voice_sample * util::db_to_gain_fast(self.params.gain.smoothed.next());
+            }
+        }
+
+        for s in channels.iter_mut().take(2) {
+            *s = out_sample;
+        }
+    }
+
+    ProcessStatus::KeepAlive
+}
+
+}
+
+impl HarmonicNxo {
+    fn note_garbage_collection(&mut self) {
+        self.active_voices.retain(|_, &mut i| !self.voices[i].is_released_and_done());
     }
 }
 
-impl Vst3Plugin for PolySynth {
+impl Vst3Plugin for HarmonicNxo {
     const VST3_CLASS_ID: [u8; 16] = *b"WTH_Harmonic_NXO";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Instrument,
@@ -202,4 +223,4 @@ impl Vst3Plugin for PolySynth {
     ];
 }
 
-nih_export_vst3!(PolySynth);
+nih_export_vst3!(HarmonicNxo);
