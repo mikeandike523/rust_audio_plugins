@@ -45,7 +45,8 @@ members = [
   "plugins/safety_limiter",
   "plugins/spectral_compressor",
 
-  "custom_plugins/harmonic_nxo"
+  "custom_plugins/harmonic_nxo",
+  "nih-plug-webview"
 ]
 
 [features]
