@@ -231,8 +231,7 @@ impl Plugin for HarmonicNxo {
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (640, 480))
-            .with_background_color((150, 150, 150, 255))
-            .with_developer_mode(true)
+            // .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
                 event.key == Key::Escape
