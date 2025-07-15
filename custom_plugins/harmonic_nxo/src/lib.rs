@@ -29,14 +29,22 @@ const DEFAULT_RELEASE: f32 = 0.1;
 struct PluginParams {
     #[id = "gain"]
     pub gain: FloatParam,
+    gain_value_changed: Arc<AtomicBool>,
 }
 
 impl Default for PluginParams {
-    fn default() -> Self {
+    fn default() -> Self {        let gain_value_changed = Arc::new(AtomicBool::new(false));
+
+        let v = gain_value_changed.clone();
+        let param_callback = Arc::new(move |_: f32| {
+            v.store(true, Ordering::Relaxed);
+        });
+
+
         PluginParams {
             gain: FloatParam::new(
                 "Gain",
-                -10.0,
+                -9.0,
                 FloatRange::Linear {
                     min: -30.0,
                     max: 0.0,
@@ -44,7 +52,10 @@ impl Default for PluginParams {
             )
             .with_smoother(SmoothingStyle::Linear(3.0))
             .with_step_size(0.01)
-            .with_unit(" dB"),
+            .with_unit(" dB")
+            .with_callback(param_callback.clone())
+            ,
+             gain_value_changed
         }
     }
 }
@@ -53,8 +64,7 @@ impl Default for PluginParams {
 #[serde(tag = "type")]
 enum Action {
     Init,
-    SetSize { width: u32, height: u32 },
-    SetGain { value: f32 },
+    SetGainDB { gain: f32 },
 }
 
 struct Voice {
@@ -229,9 +239,10 @@ impl Plugin for HarmonicNxo {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let initial_gain = self.params.gain.value();
         let params = self.params.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (640, 480))
-            // .with_developer_mode(true)
+            .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
                 event.key == Key::Escape
@@ -240,26 +251,37 @@ impl Plugin for HarmonicNxo {
                 while let Ok(value) = ctx.next_event() {
                     if let Ok(action) = serde_json::from_value(value) {
                         match action {
-                            Action::SetGain { value } => {
+                            Action::SetGainDB { gain } => {
                                 setter.begin_set_parameter(&params.gain);
-                                setter.set_parameter_normalized(&params.gain, value);
+                                setter.set_parameter(&params.gain, gain);
                                 setter.end_set_parameter(&params.gain);
-                            }
-                            Action::SetSize { width, height } => {
-                                ctx.resize(window, width, height);
                             }
                             Action::Init => {
                                 ctx.send_json(json!({
-                                    "type": "set_size",
-                                    "width": ctx.width.load(Ordering::Relaxed),
-                                    "height": ctx.height.load(Ordering::Relaxed)
+                                    "type":"SetCargoPackageVersion",
+                                    "version":env!("CARGO_PKG_VERSION")
                                 }));
+                                ctx.send_json(json!({
+                                    "type":"SetInitialGain",
+                                    "gain": initial_gain
+                                }))
                             }
+    
                         }
                     } else {
                         panic!("Invalid action received from web UI.")
                     }
                 }
+
+                // if gain_value_changed.swap(false, Ordering::Relaxed) {
+                //     ctx.send_json(json!({
+                //         "type": "param_change",
+                //         "param": "gain",
+                //         "value": params.gain.unmodulated_normalized_value(),
+                //         "text": params.gain.to_string()
+                //     }));
+                // }
+
             });
         Some(Box::new(editor))
     }
