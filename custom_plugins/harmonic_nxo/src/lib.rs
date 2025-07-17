@@ -64,6 +64,8 @@ impl Default for PluginParams {
 #[serde(tag = "type")]
 enum Action {
     Init,
+    QueryCargoPackageVersion,
+    QueryGain,
     SetGainDB { gain: f32 },
 }
 
@@ -239,7 +241,6 @@ impl Plugin for HarmonicNxo {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let initial_gain = self.params.gain.value();
         let params = self.params.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (640, 480))
             .with_developer_mode(true)
@@ -257,16 +258,21 @@ impl Plugin for HarmonicNxo {
                                 setter.end_set_parameter(&params.gain);
                             }
                             Action::Init => {
-                                ctx.send_json(json!({
-                                    "type":"SetCargoPackageVersion",
-                                    "version":env!("CARGO_PKG_VERSION")
-                                }));
-                                ctx.send_json(json!({
-                                    "type":"SetInitialGain",
-                                    "gain": initial_gain
-                                }))
+                                // no-op
                             }
-    
+                            Action::QueryCargoPackageVersion => {
+                                ctx.send_json(json!({
+                                    "type": "RespondCargoPackageVersion",
+                                    "version": env!("CARGO_PKG_VERSION")
+                                }));
+                            }
+                            Action::QueryGain => {
+                                ctx.send_json(json!({
+                                    "type": "RespondGain",
+                                    "gain": params.gain.value()
+                                }));
+                            }
+
                         }
                     } else {
                         panic!("Invalid action received from web UI.")

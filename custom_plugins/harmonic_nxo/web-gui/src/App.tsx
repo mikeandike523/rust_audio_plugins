@@ -12,10 +12,10 @@ function App() {
 
   const incomingMessageHandlers = useMemo(() => {
     return {
-      SetCargoPackageVersion: async (payload: { version: string }) => {
+      RespondCargoPackageVersion: async (payload: { version: string }) => {
         setCargoPackageVersion(payload.version);
       },
-      SetInitialGain: async (payload: { gain: number }) => {
+      RespondGain: async (payload: { gain: number }) => {
         setGain(payload.gain);
       },
     };
@@ -36,7 +36,10 @@ function App() {
       incomingMessageHandlers[messageType](payload as Record<string, unknown>);
     };
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
-      type: "Init",
+      type: "QueryCargoPackageVersion",
+    });
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type: "QueryGain",
     });
   }, []);
 
