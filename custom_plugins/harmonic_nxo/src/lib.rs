@@ -278,16 +278,6 @@ impl Plugin for HarmonicNxo {
                         panic!("Invalid action received from web UI.")
                     }
                 }
-
-                // if gain_value_changed.swap(false, Ordering::Relaxed) {
-                //     ctx.send_json(json!({
-                //         "type": "param_change",
-                //         "param": "gain",
-                //         "value": params.gain.unmodulated_normalized_value(),
-                //         "text": params.gain.to_string()
-                //     }));
-                // }
-
             });
         Some(Box::new(editor))
     }
