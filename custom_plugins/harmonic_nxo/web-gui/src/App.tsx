@@ -1,30 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
-import { Div, H1, P } from "style-props-html";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, Div, H1, P, Span } from "style-props-html";
 import Slider from "react-slider";
 import { type NIHPlugWebviewWindow } from "./nih-plug-webview-window";
 import "../styles/sliders.css";
 import lodash from "lodash";
+import Editor, { type OnMount } from "@monaco-editor/react";
+import type monaco from "monaco-editor";
+import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
+import { MdPlayArrow } from "react-icons/md";
+import { css } from "@emotion/react";
 
 function App() {
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
-  console.log("Rendered!")
+  const handleEditorDidMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
+  };
+
+  console.log("Rendered!");
 
   const [ipcReady, setIpcReady] = useState(false);
 
   function checkIpcReady() {
     const asModifiedWindow = window as object as NIHPlugWebviewWindow;
-    if(typeof asModifiedWindow.sendToPlugin === "function") {
+    if (typeof asModifiedWindow.sendToPlugin === "function") {
       setIpcReady(true);
     }
   }
 
   useEffect(() => {
-    if(ipcReady) return;
-    const interval = setInterval(checkIpcReady,100)
+    if (ipcReady) return;
+    const interval = setInterval(checkIpcReady, 100);
     return () => clearInterval(interval);
-  },[
-    ipcReady,
-  ])
+  }, [ipcReady]);
 
   const [cargoPackageVersion, setCargoPackageVersion] = useState("");
 
@@ -58,14 +66,14 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if(!ipcReady) return;
+    if (!ipcReady) return;
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryCargoPackageVersion",
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryGain",
     });
-  },[ipcReady])
+  }, [ipcReady]);
 
   const onGainChange = useMemo(
     () =>
@@ -87,7 +95,13 @@ function App() {
   );
 
   return (
-    <Div width="100dvw" height="100dvh">
+    <Div
+      width="100dvw"
+      height="100dvh"
+      display="grid"
+      gridTemplateRows="auto auto 1fr"
+      overflow="hidden"
+    >
       <Div
         width="100%"
         display="flex"
@@ -166,8 +180,62 @@ function App() {
         </Div>
         <P visibility="hidden" width="12rem"></P>
       </Div>
-      <Div width="100%" padding="0.5rem" background="skyblue">
-        <H1 fontSize="1.5rem">Harmonic NXO</H1>
+      <Div
+        width="100dvw"
+        padding="0.5rem"
+        background="skyblue"
+        display="flex"
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="flex-start"
+      >
+        <H1 flex={0} fontSize="1.5rem" whiteSpace="nowrap">
+          Harmonic NXO
+        </H1>
+        <Div flex={1}></Div>
+        <Button
+          flex={0}
+          fontSize="1.25rem"
+          padding="0.25rem"
+          borderRadius="0.75rem"
+          border="2px solid white"
+          color="white"
+          display="flex"
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="center"
+          cursor="pointer"
+          transformOrigin="center"
+          transition="transform 0.1s ease-in-out"
+          css={css`
+            transform: scale(1);
+            background: blue;
+            &:hover {
+              transform: scale(1.05);
+              background: lightblue;
+            }
+            &:active {
+              transform: scale(0.95);
+              background: green;
+            }
+          `}
+        >
+          <Span>Compile</Span>
+          <MdPlayArrow />
+        </Button>
+      </Div>
+      <Div display="grid" gridTemplateColumns="1fr 1fr">
+        <Editor
+          theme="vs-dark"
+          height="100%"
+          defaultLanguage="lua"
+          defaultValue={exampleLuaGuitar}
+          onMount={handleEditorDidMount}
+          options={{
+            wordWrap: "on",
+          }}
+        />
+        <Div></Div>
       </Div>
     </Div>
   );
