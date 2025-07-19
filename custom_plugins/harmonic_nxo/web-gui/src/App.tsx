@@ -6,6 +6,26 @@ import "../styles/sliders.css";
 import lodash from "lodash";
 
 function App() {
+
+  console.log("Rendered!")
+
+  const [ipcReady, setIpcReady] = useState(false);
+
+  function checkIpcReady() {
+    const asModifiedWindow = window as object as NIHPlugWebviewWindow;
+    if(typeof asModifiedWindow.sendToPlugin === "function") {
+      setIpcReady(true);
+    }
+  }
+
+  useEffect(() => {
+    if(ipcReady) return;
+    const interval = setInterval(checkIpcReady,100)
+    return () => clearInterval(interval);
+  },[
+    ipcReady,
+  ])
+
   const [cargoPackageVersion, setCargoPackageVersion] = useState("");
 
   const [gain, setGain] = useState<number | null>(null);
@@ -35,13 +55,17 @@ function App() {
       }
       incomingMessageHandlers[messageType](payload as Record<string, unknown>);
     };
+  }, []);
+
+  useEffect(() => {
+    if(!ipcReady) return;
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryCargoPackageVersion",
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryGain",
     });
-  }, []);
+  },[ipcReady])
 
   const onGainChange = useMemo(
     () =>

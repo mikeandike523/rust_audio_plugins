@@ -1,0 +1,13 @@
+{
+  "name": "rust_audio_plugins",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start-gui-dev-server":".\\__git_bash.exe scripts/start-gui-dev-server.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.11.0"
+}
