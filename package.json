@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start-gui-dev-server":".\\__git_bash.exe scripts/start-gui-dev-server.sh"
+    "start-harmonic-nxo-gui-dev":".\\__git_bash.exe scripts/start-harmonic-nxo-gui-dev.sh"
   },
   "keywords": [],
   "author": "",
