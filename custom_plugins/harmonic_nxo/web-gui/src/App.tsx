@@ -9,9 +9,12 @@ import type monaco from "monaco-editor";
 import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
 import { MdPlayArrow } from "react-icons/md";
 import { css } from "@emotion/react";
+import PianoWidget from "./components/PianoWidget";
 
 function App() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  const [midiStates, setMidiStates] = useState<Array<boolean>>(new Array(128).fill(false));
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -99,7 +102,7 @@ function App() {
       width="100dvw"
       height="100dvh"
       display="grid"
-      gridTemplateRows="auto auto 1fr"
+      gridTemplateRows="auto auto 1fr auto"
       overflow="hidden"
     >
       <Div
@@ -237,6 +240,8 @@ function App() {
         />
         <Div></Div>
       </Div>
+      {/* Piano Widget */}
+      <PianoWidget midiStates={midiStates} />
     </Div>
   );
 }
