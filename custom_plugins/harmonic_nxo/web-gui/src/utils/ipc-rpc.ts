@@ -10,8 +10,11 @@ export class IpcRpc {
   private pendingSend = new Map<number, unknown>();
   private incoming = new Map<number, unknown>();
   private nextId = 0;
+  private send: RpcSend
 
-  constructor(private send: RpcSend) {}
+  constructor( send: RpcSend) {
+    this.send = send;
+  }
 
   registerFunction(name: string, fn: (...args: any[]) => any | Promise<any>) {
     this.funcs[name] = fn;
