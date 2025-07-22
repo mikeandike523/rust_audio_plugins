@@ -1,4 +1,12 @@
-use baseview::{Event, Size, Window, WindowHandle, WindowOpenOptions, WindowScalePolicy};
+use baseview::{
+    Event,
+    Size,
+    Window,
+    WindowHandle,
+    WindowOpenOptions,
+    WindowScalePolicy,
+    WindowEvent,
+};
 use nih_plug::prelude::{Editor, GuiContext, ParamSetter};
 use serde_json::Value;
 use std::{
@@ -154,7 +162,7 @@ impl baseview::WindowHandler for WindowHandler {
         (self.event_loop_handler)(&self, setter, window);
     }
 
-    fn on_event(&mut self, _window: &mut baseview::Window, event: Event) -> EventStatus {
+    fn on_event(&mut self, window: &mut baseview::Window, event: Event) -> EventStatus {
         match event {
             Event::Keyboard(event) => {
                 if (self.keyboard_handler)(event) {
@@ -164,6 +172,23 @@ impl baseview::WindowHandler for WindowHandler {
                 }
             }
             Event::Mouse(mouse_event) => (self.mouse_handler)(mouse_event),
+            Event::Window(window_event) => match window_event {
+                WindowEvent::Resized(window_info) => {
+                    let logical_size = window_info.logical_size();
+                    let width = logical_size.width.round() as u32;
+                    let height = logical_size.height.round() as u32;
+                    self.webview.set_bounds(wry::Rect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    });
+                    self.width.store(width, Ordering::Relaxed);
+                    self.height.store(height, Ordering::Relaxed);
+                    EventStatus::Captured
+                }
+                _ => EventStatus::Ignored,
+            },
             _ => EventStatus::Ignored,
         }
     }
