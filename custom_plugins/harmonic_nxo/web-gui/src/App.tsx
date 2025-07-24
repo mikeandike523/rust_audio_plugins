@@ -10,6 +10,7 @@ import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
 import { MdPlayArrow } from "react-icons/md";
 import { css } from "@emotion/react";
 import PianoWidget from "./components/PianoWidget";
+import HarmonicsTable from "./components/HarmonicsTable";
 import {
   isHarmonicResult,
   type HarmonicResult,
@@ -303,7 +304,7 @@ function App() {
         <Div padding="0.5rem" overflow="auto">
           {compileError && <pre style={{ color: "red" }}>{compileError}</pre>}
           {!compileError && compileResult && (
-            <pre>{JSON.stringify(compileResult, null, 2)}</pre>
+            <HarmonicsTable result={compileResult} />
           )}
         </Div>
       </Div>
