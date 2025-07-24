@@ -119,6 +119,7 @@ vst3-sys = { git = "https://github.com/robbert-vdh/vst3-sys.git", branch = "fix/
 
 # Used for the `zstd` feature
 zstd = { version = "0.12.3", optional = true }
+anymap = "0.12.1"
 
 [dev-dependencies]
 approx = "0.5.1"
