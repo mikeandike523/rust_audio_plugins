@@ -7,8 +7,9 @@ use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     num::NonZeroU32,
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -136,6 +137,8 @@ pub struct HarmonicNxo {
     active_voices: HashMap<u8, usize>,
     queue: VecDeque<usize>,
     ts: u64,
+    midi_states: Arc<Vec<AtomicBool>>,
+    last_midi_send: Arc<Mutex<Instant>>,
 }
 
 impl Default for HarmonicNxo {
@@ -147,6 +150,8 @@ impl Default for HarmonicNxo {
             active_voices: HashMap::new(),
             queue: VecDeque::new(),
             ts: 0,
+            midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
+            last_midi_send: Arc::new(Mutex::new(Instant::now())),
         }
     }
 }
@@ -216,10 +221,16 @@ impl Plugin for HarmonicNxo {
                         self.queue.push_back(idx);
                         self.voices[idx].trigger(*note, *velocity, self.ts);
                         self.active_voices.insert(*note, idx);
+                        if let Some(state) = self.midi_states.get(*note as usize) {
+                            state.store(true, Ordering::Relaxed);
+                        }
                     }
                     NoteEvent::NoteOff { note, .. } => {
                         if let Some(&i) = self.active_voices.get(note) {
                             self.voices[i].release();
+                        }
+                        if let Some(state) = self.midi_states.get(*note as usize) {
+                            state.store(false, Ordering::Relaxed);
                         }
                     }
                     _ => {}
@@ -242,6 +253,8 @@ impl Plugin for HarmonicNxo {
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
+        let midi_states = self.midi_states.clone();
+        let last_midi_send = self.last_midi_send.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
@@ -276,6 +289,21 @@ impl Plugin for HarmonicNxo {
                         }
                     } else {
                         panic!("Invalid action received from web UI.")
+                    }
+                }
+
+                {
+                    let mut last = last_midi_send.lock().unwrap();
+                    if last.elapsed() >= Duration::from_millis(100) {
+                        let states: Vec<bool> = midi_states
+                            .iter()
+                            .map(|s| s.load(Ordering::Relaxed))
+                            .collect();
+                        ctx.send_json(json!({
+                            "type": "MidiStateUpdate",
+                            "states": states
+                        }));
+                        *last = Instant::now();
                     }
                 }
             });

@@ -49,6 +49,9 @@ function App() {
       RespondGain: async (payload: { gain: number }) => {
         setGain(payload.gain);
       },
+      MidiStateUpdate: async (payload: { states: boolean[] }) => {
+        setMidiStates(payload.states);
+      },
     };
   }, []) as object as Record<
     string,
