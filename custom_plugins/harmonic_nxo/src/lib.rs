@@ -242,7 +242,7 @@ impl Plugin for HarmonicNxo {
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
-        let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1600, 900))
+        let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
@@ -297,3 +297,21 @@ impl Vst3Plugin for HarmonicNxo {
 }
 
 nih_export_vst3!(HarmonicNxo);
+
+
+impl ClapPlugin for HarmonicNxo {
+    // Reverse‑DNS style, all lowercase, no spaces
+    const CLAP_ID: &'static str = "wthplugins.harmonic_nxo";
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("Harmonic NXO synth");
+    const CLAP_MANUAL_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> = None;
+
+    // Pick what applies
+    const CLAP_FEATURES: &'static [ClapFeature] = &[
+        ClapFeature::Instrument,
+        ClapFeature::Synthesizer,
+        ClapFeature::Stereo,
+    ];
+}
+
+nih_export_clap!(HarmonicNxo);

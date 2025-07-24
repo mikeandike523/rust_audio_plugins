@@ -22,9 +22,9 @@ use clap_sys::ext::audio_ports::{
 use clap_sys::ext::audio_ports_config::{
     clap_audio_ports_config, clap_plugin_audio_ports_config, CLAP_EXT_AUDIO_PORTS_CONFIG,
 };
-// use clap_sys::ext::draft::remote_controls::{
-//     clap_plugin_remote_controls, clap_remote_controls_page, CLAP_EXT_REMOTE_CONTROLS,
-// };
+use clap_sys::ext::remote_controls::{
+    clap_plugin_remote_controls, clap_remote_controls_page, CLAP_EXT_REMOTE_CONTROLS,
+};
 use clap_sys::ext::gui::{
     clap_gui_resize_hints, clap_host_gui, clap_plugin_gui, clap_window, CLAP_EXT_GUI,
     CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
@@ -225,9 +225,9 @@ pub struct Wrapper<P: ClapPlugin> {
 
     host_thread_check: AtomicRefCell<Option<ClapPtr<clap_host_thread_check>>>,
 
-    // clap_plugin_remote_controls: clap_plugin_remote_controls,
-    // /// The plugin's remote control pages, if it defines any. Filled when initializing the plugin.
-    // remote_control_pages: Vec<clap_remote_controls_page>,
+    clap_plugin_remote_controls: clap_plugin_remote_controls,
+    /// The plugin's remote control pages, if it defines any. Filled when initializing the plugin.
+    remote_control_pages: Vec<clap_remote_controls_page>,
 
     clap_plugin_render: clap_plugin_render,
 
@@ -645,11 +645,11 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             host_thread_check: AtomicRefCell::new(None),
 
-            // clap_plugin_remote_controls: clap_plugin_remote_controls {
-            //     count: Some(Self::ext_remote_controls_count),
-            //     get: Some(Self::ext_remote_controls_get),
-            // },
-            // remote_control_pages,
+            clap_plugin_remote_controls: clap_plugin_remote_controls {
+                count: Some(Self::ext_remote_controls_count),
+                get: Some(Self::ext_remote_controls_get),
+            },
+            remote_control_pages,
 
             clap_plugin_render: clap_plugin_render {
                 has_hard_realtime_requirement: Some(Self::ext_render_has_hard_realtime_requirement),
@@ -2327,13 +2327,9 @@ impl<P: ClapPlugin> Wrapper<P> {
             &wrapper.clap_plugin_note_ports as *const _ as *const c_void
         } else if id == CLAP_EXT_PARAMS {
             &wrapper.clap_plugin_params as *const _ as *const c_void
-        }
-        
-        //  else if id == CLAP_EXT_REMOTE_CONTROLS {
-        //     &wrapper.clap_plugin_remote_controls as *const _ as *const c_void
-        // }
-        
-         else if id == CLAP_EXT_RENDER {
+        } else if id == CLAP_EXT_REMOTE_CONTROLS {
+            &wrapper.clap_plugin_remote_controls as *const _ as *const c_void
+        } else if id == CLAP_EXT_RENDER {
             &wrapper.clap_plugin_render as *const _ as *const c_void
         } else if id == CLAP_EXT_STATE {
             &wrapper.clap_plugin_state as *const _ as *const c_void
@@ -2715,29 +2711,26 @@ impl<P: ClapPlugin> Wrapper<P> {
         true
     }
 
-    unsafe extern "C" fn ext_gui_can_resize(plugin: *const clap_plugin) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-        wrapper.editor.borrow().as_ref().unwrap().lock().can_resize()
+    unsafe extern "C" fn ext_gui_can_resize(_plugin: *const clap_plugin) -> bool {
+        // TODO: Implement Host->Plugin GUI resizing
+        false
     }
 
     unsafe extern "C" fn ext_gui_get_resize_hints(
         _plugin: *const clap_plugin,
         _hints: *mut clap_gui_resize_hints,
     ) -> bool {
-        // TODO: GUI resizing hints
+        // TODO: Implement Host->Plugin GUI resizing
         false
     }
 
     unsafe extern "C" fn ext_gui_adjust_size(
-        plugin: *const clap_plugin,
-        width: *mut u32,
-        height: *mut u32,
+        _plugin: *const clap_plugin,
+        _width: *mut u32,
+        _height: *mut u32,
     ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, width, height);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-        wrapper.editor.borrow().as_ref().unwrap().lock().can_resize() &&
-            *width > 0 && *height > 0
+        // TODO: Implement Host->Plugin GUI resizing
+        false
     }
 
     unsafe extern "C" fn ext_gui_set_size(
@@ -2745,17 +2738,20 @@ impl<P: ClapPlugin> Wrapper<P> {
         width: u32,
         height: u32,
     ) -> bool {
+        // TODO: Implement Host->Plugin GUI resizing
         // TODO: The host will also call this if an asynchronous (on Linux) resize request fails
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
         let wrapper = &*((*plugin).plugin_data as *const Self);
 
+        let (unscaled_width, unscaled_height) =
+            wrapper.editor.borrow().as_ref().unwrap().lock().size();
         let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
         let (editor_width, editor_height) = (
-            (width as f32 * scaling_factor).round() as u32,
-            (height as f32 * scaling_factor).round() as u32,
+            (unscaled_width as f32 * scaling_factor).round() as u32,
+            (unscaled_height as f32 * scaling_factor).round() as u32,
         );
-        
-        wrapper.editor.borrow().as_ref().unwrap().lock().set_size(editor_width, editor_height)
+
+        width == editor_width && height == editor_height
     }
 
     unsafe extern "C" fn ext_gui_set_parent(
@@ -3047,30 +3043,30 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    // unsafe extern "C" fn ext_remote_controls_count(plugin: *const clap_plugin) -> u32 {
-    //     check_null_ptr!(0, plugin, (*plugin).plugin_data);
-    //     let wrapper = &*((*plugin).plugin_data as *const Self);
+    unsafe extern "C" fn ext_remote_controls_count(plugin: *const clap_plugin) -> u32 {
+        check_null_ptr!(0, plugin, (*plugin).plugin_data);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
 
-    //     wrapper.remote_control_pages.len() as u32
-    // }
+        wrapper.remote_control_pages.len() as u32
+    }
 
-    // unsafe extern "C" fn ext_remote_controls_get(
-    //     plugin: *const clap_plugin,
-    //     page_index: u32,
-    //     page: *mut clap_remote_controls_page,
-    // ) -> bool {
-    //     check_null_ptr!(false, plugin, (*plugin).plugin_data, page);
-    //     let wrapper = &*((*plugin).plugin_data as *const Self);
+    unsafe extern "C" fn ext_remote_controls_get(
+        plugin: *const clap_plugin,
+        page_index: u32,
+        page: *mut clap_remote_controls_page,
+    ) -> bool {
+        check_null_ptr!(false, plugin, (*plugin).plugin_data, page);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
 
-    //     nih_debug_assert!(page_index as usize <= wrapper.remote_control_pages.len());
-    //     match wrapper.remote_control_pages.get(page_index as usize) {
-    //         Some(p) => {
-    //             *page = *p;
-    //             true
-    //         }
-    //         None => false,
-    //     }
-    // }
+        nih_debug_assert!(page_index as usize <= wrapper.remote_control_pages.len());
+        match wrapper.remote_control_pages.get(page_index as usize) {
+            Some(p) => {
+                *page = *p;
+                true
+            }
+            None => false,
+        }
+    }
 
     unsafe extern "C" fn ext_render_has_hard_realtime_requirement(
         _plugin: *const clap_plugin,
