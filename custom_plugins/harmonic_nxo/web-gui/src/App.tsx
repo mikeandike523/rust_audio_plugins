@@ -55,10 +55,10 @@ function App() {
       } else if (isHarmonicResult(e.data.result)) {
         setCompileError(null);
         setCompileResult(e.data.result);
-        (window as object as NIHPlugWebviewWindow).sendToPlugin({
-          type: "LuaResult",
-          data: e.data.result,
-        });
+        // (window as object as NIHPlugWebviewWindow).sendToPlugin({
+        //   type: "LuaResult",
+        //   data: e.data.result,
+        // });
       } else {
         setCompileError("Invalid return shape");
         setCompileResult(null);

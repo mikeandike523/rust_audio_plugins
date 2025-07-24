@@ -68,6 +68,7 @@ enum Action {
     QueryCargoPackageVersion,
     QueryGain,
     SetGainDB { gain: f32 },
+    
 }
 
 struct Voice {
@@ -270,6 +271,7 @@ impl Plugin for HarmonicNxo {
                                 setter.set_parameter(&params.gain, gain);
                                 setter.end_set_parameter(&params.gain);
                             }
+
                             Action::Init => {
                                 // no-op
                             }
