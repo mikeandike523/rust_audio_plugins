@@ -10,9 +10,13 @@ import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
 import { MdPlayArrow } from "react-icons/md";
 import { css } from "@emotion/react";
 import PianoWidget from "./components/PianoWidget";
+import { isHarmonicResult, type HarmonicResult } from "./utils/validateLuaResult";
 
 function App() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const workerRef = useRef<Worker>();
+  const [compileError, setCompileError] = useState<string | null>(null);
+  const [compileResult, setCompileResult] = useState<HarmonicResult | null>(null);
 
   const [midiStates, setMidiStates] = useState<Array<boolean>>(new Array(128).fill(false));
 
@@ -21,6 +25,37 @@ function App() {
   };
 
   console.log("Rendered!");
+
+  useEffect(() => {
+    workerRef.current = new Worker(
+      new URL("./workers/luaWorker.ts", import.meta.url),
+      { type: "module" }
+    );
+    return () => workerRef.current?.terminate();
+  }, []);
+
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker) return;
+    const handler = (e: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
+      if (e.data.error) {
+        setCompileError(e.data.error);
+        setCompileResult(null);
+      } else if (isHarmonicResult(e.data.result)) {
+        setCompileError(null);
+        setCompileResult(e.data.result);
+        (window as object as NIHPlugWebviewWindow).sendToPlugin({
+          type: "LuaResult",
+          data: e.data.result,
+        });
+      } else {
+        setCompileError("Invalid return shape");
+        setCompileResult(null);
+      }
+    };
+    worker.addEventListener("message", handler);
+    return () => worker.removeEventListener("message", handler);
+  }, []);
 
   const [ipcReady, setIpcReady] = useState(false);
 
@@ -225,6 +260,12 @@ function App() {
               background: green;
             }
           `}
+          onClick={() => {
+            const code = editorRef.current?.getValue() ?? "";
+            setCompileError(null);
+            setCompileResult(null);
+            workerRef.current?.postMessage({ id: Date.now(), code });
+          }}
         >
           <Span>Compile</Span>
           <MdPlayArrow />
@@ -241,7 +282,14 @@ function App() {
             wordWrap: "on",
           }}
         />
-        <Div></Div>
+        <Div padding="0.5rem" overflow="auto">
+          {compileError && (
+            <pre style={{ color: "red" }}>{compileError}</pre>
+          )}
+          {!compileError && compileResult && (
+            <pre>{JSON.stringify(compileResult, null, 2)}</pre>
+          )}
+        </Div>
       </Div>
       {/* Piano Widget */}
       <PianoWidget midiStates={midiStates} />
