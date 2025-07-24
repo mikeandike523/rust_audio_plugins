@@ -10,21 +10,29 @@ import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
 import { MdPlayArrow } from "react-icons/md";
 import { css } from "@emotion/react";
 import PianoWidget from "./components/PianoWidget";
-import { isHarmonicResult, type HarmonicResult } from "./utils/validateLuaResult";
+import {
+  isHarmonicResult,
+  type HarmonicResult,
+} from "./utils/validateLuaResult";
 
 function App() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const workerRef = useRef<Worker>();
+  const workerRef = useRef<Worker>(undefined);
   const [compileError, setCompileError] = useState<string | null>(null);
-  const [compileResult, setCompileResult] = useState<HarmonicResult | null>(null);
+  const [compileResult, setCompileResult] = useState<HarmonicResult | null>(
+    null
+  );
 
-  const [midiStates, setMidiStates] = useState<Array<boolean>>(new Array(128).fill(false));
+  const [midiStates, setMidiStates] = useState<Array<boolean>>(
+    new Array(128).fill(false)
+  );
+  const midiStatesBackupRef = useRef<Array<boolean>>(
+    new Array(128).fill(false)
+  );
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
   };
-
-  console.log("Rendered!");
 
   useEffect(() => {
     workerRef.current = new Worker(
@@ -37,7 +45,9 @@ function App() {
   useEffect(() => {
     const worker = workerRef.current;
     if (!worker) return;
-    const handler = (e: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
+    const handler = (
+      e: MessageEvent<{ id: number; result?: unknown; error?: string }>
+    ) => {
       if (e.data.error) {
         setCompileError(e.data.error);
         setCompileResult(null);
@@ -85,7 +95,15 @@ function App() {
         setGain(payload.gain);
       },
       MidiStateUpdate: async (payload: { states: boolean[] }) => {
-        setMidiStates(payload.states);
+        if (midiStatesBackupRef.current.some((s) => s)) {
+          setMidiStates(payload.states);
+          midiStatesBackupRef.current = [...payload.states];
+        } else {
+          if (payload.states.some((s) => s)) {
+            setMidiStates(payload.states);
+            midiStatesBackupRef.current = [...payload.states];
+          }
+        }
       },
     };
   }, []) as object as Record<
@@ -283,9 +301,7 @@ function App() {
           }}
         />
         <Div padding="0.5rem" overflow="auto">
-          {compileError && (
-            <pre style={{ color: "red" }}>{compileError}</pre>
-          )}
+          {compileError && <pre style={{ color: "red" }}>{compileError}</pre>}
           {!compileError && compileResult && (
             <pre>{JSON.stringify(compileResult, null, 2)}</pre>
           )}
