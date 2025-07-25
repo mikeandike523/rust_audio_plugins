@@ -10,17 +10,17 @@ import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
 import { MdPlayArrow } from "react-icons/md";
 import { css } from "@emotion/react";
 import PianoWidget from "./components/PianoWidget";
-import HarmonicsTable from "./components/HarmonicsTable";
+import NXOTable from "./components/NXOTable";
 import {
-  isHarmonicResult,
-  type HarmonicResult,
+  isNXODefinition,
+  type NXODefinition,
 } from "./utils/validateLuaResult";
 
 function App() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const workerRef = useRef<Worker>(undefined);
   const [compileError, setCompileError] = useState<string | null>(null);
-  const [compileResult, setCompileResult] = useState<HarmonicResult | null>(
+  const [compileResult, setCompileResult] = useState<NXODefinition | null>(
     null
   );
 
@@ -52,7 +52,7 @@ function App() {
       if (e.data.error) {
         setCompileError(e.data.error);
         setCompileResult(null);
-      } else if (isHarmonicResult(e.data.result)) {
+      } else if (isNXODefinition(e.data.result)) {
         setCompileError(null);
         setCompileResult(e.data.result);
         // (window as object as NIHPlugWebviewWindow).sendToPlugin({
@@ -60,7 +60,26 @@ function App() {
         //   data: e.data.result,
         // });
       } else {
-        setCompileError("Invalid return shape");
+        setCompileError(
+`
+Invalid return shape.
+
+Return value should be a lua table which is akin to the following typescript type:
+
+{
+  [frequencyMultiplier: string|number]:
+    {
+      v: number;
+      a: number;
+      d: number;
+      s: number;
+      r: number;
+    }
+}
+`
+
+
+        );
         setCompileResult(null);
       }
     };
@@ -304,7 +323,7 @@ function App() {
         <Div padding="0.5rem" overflow="auto">
           {compileError && <pre style={{ color: "red" }}>{compileError}</pre>}
           {!compileError && compileResult && (
-            <HarmonicsTable result={compileResult} />
+            <NXOTable nxoDefinition={compileResult} />
           )}
         </Div>
       </Div>
