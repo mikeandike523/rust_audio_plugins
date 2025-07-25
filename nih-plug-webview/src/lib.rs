@@ -1,11 +1,5 @@
 use baseview::{
-    Event,
-    Size,
-    Window,
-    WindowHandle,
-    WindowOpenOptions,
-    WindowScalePolicy,
-    WindowEvent,
+    Event, Size, Window, WindowEvent, WindowHandle, WindowOpenOptions, WindowScalePolicy,
 };
 use nih_plug::prelude::{Editor, GuiContext, ParamSetter};
 use serde_json::Value;
@@ -123,6 +117,8 @@ pub struct WindowHandler {
     events_receiver: Receiver<Value>,
     pub width: Arc<AtomicU32>,
     pub height: Arc<AtomicU32>,
+    current_width: u32,
+    current_height: u32,
 }
 
 impl WindowHandler {
@@ -158,6 +154,15 @@ impl WindowHandler {
 
 impl baseview::WindowHandler for WindowHandler {
     fn on_frame(&mut self, window: &mut baseview::Window) {
+        let desired_w = self.width.load(Ordering::Relaxed);
+        let desired_h = self.height.load(Ordering::Relaxed);
+
+        if desired_w != self.current_width || desired_h != self.current_height {
+            self.resize(window, desired_w, desired_h);
+            self.current_width = desired_w;
+            self.current_height = desired_h;
+        }
+
         let setter = ParamSetter::new(&*self.context);
         (self.event_loop_handler)(&self, setter, window);
     }
@@ -177,6 +182,10 @@ impl baseview::WindowHandler for WindowHandler {
                     let logical_size = window_info.logical_size();
                     let width = logical_size.width.round() as u32;
                     let height = logical_size.height.round() as u32;
+
+                    self.current_width = width;
+                    self.current_height = height;
+
                     self.webview.set_bounds(wry::Rect {
                         x: 0,
                         y: 0,
@@ -207,6 +216,16 @@ impl Drop for Instance {
 unsafe impl Send for Instance {}
 
 impl Editor for WebViewEditor {
+    fn can_resize(&self) -> bool {
+        true
+    }
+
+    fn set_size(&self, _width: u32, _height: u32) -> bool {
+        self.width.store(_width, Ordering::Relaxed);
+        self.height.store(_height, Ordering::Relaxed);
+        true
+    }
+
     fn spawn(
         &self,
         parent: nih_plug::prelude::ParentWindowHandle,
@@ -280,6 +299,8 @@ impl Editor for WebViewEditor {
                 mouse_handler,
                 width,
                 height,
+                current_width: 0,
+                current_height: 0,
             }
         });
         return Box::new(Instance { window_handle });
