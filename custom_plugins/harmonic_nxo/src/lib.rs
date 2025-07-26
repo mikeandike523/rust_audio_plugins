@@ -14,6 +14,7 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::json;
+use ordered_float::OrderedFloat;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -51,7 +52,26 @@ struct OscillatorParams {
 }
 
 type RawNxoDefinition = HashMap<String, RawOscillatorParams>;
-type NxoDefinition = HashMap<f32, OscillatorParams>;
+
+#[derive(Debug, Clone)]
+struct NxoDefinition(HashMap<OrderedFloat<f32>, OscillatorParams>);
+
+impl Default for NxoDefinition {
+    fn default() -> Self {
+        let mut map = HashMap::new();
+        map.insert(
+            OrderedFloat(1.0),
+            OscillatorParams {
+                v: DEFAULT_V,
+                a: DEFAULT_A,
+                d: DEFAULT_D,
+                s: DEFAULT_S,
+                r: DEFAULT_R,
+            },
+        );
+        NxoDefinition(map)
+    }
+}
 
 impl TryFrom<RawNxoDefinition> for NxoDefinition {
     type Error = &'static str;
@@ -68,7 +88,7 @@ impl TryFrom<RawNxoDefinition> for NxoDefinition {
                 return Err("Invalid frequency multiplier");
             }
             out.insert(
-                key,
+                OrderedFloat(key),
                 OscillatorParams {
                     v: v.v,
                     a: v.a,
@@ -78,7 +98,7 @@ impl TryFrom<RawNxoDefinition> for NxoDefinition {
                 },
             );
         }
-        Ok(out)
+        Ok(NxoDefinition(out))
     }
 }
 
@@ -225,25 +245,13 @@ pub struct HarmonicNxo {
 
 impl Default for HarmonicNxo {
     fn default() -> Self {
-        let mut nxo = HashMap::new();
-        nxo.insert(
-            1.0,
-            OscillatorParams {
-                v: DEFAULT_V,
-                a: DEFAULT_A,
-                d: DEFAULT_D,
-                s: DEFAULT_S,
-                r: DEFAULT_R,
-            },
-        );
-
         Self {
             params: Arc::new(PluginParams::default()),
             sample_rate: 44100.0,
             voices: Vec::new(),
             active_voices: HashMap::new(),
             queue: VecDeque::new(),
-            nxo_definition: Arc::new(Mutex::new(nxo)),
+            nxo_definition: Arc::new(Mutex::new(NxoDefinition::default())),
             ts: 0,
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
