@@ -55,10 +55,13 @@ function App() {
       } else if (isNXODefinition(e.data.result)) {
         setCompileError(null);
         setCompileResult(e.data.result);
-        // (window as object as NIHPlugWebviewWindow).sendToPlugin({
-        //   type: "LuaResult",
-        //   data: e.data.result,
-        // });
+        const win = window as object as NIHPlugWebviewWindow;
+        if (typeof win.sendToPlugin === "function") {
+          win.sendToPlugin({
+            type: "SetNxoDefinition",
+            definition: e.data.result,
+          });
+        }
       } else {
         setCompileError(
 `

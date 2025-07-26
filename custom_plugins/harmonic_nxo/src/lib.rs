@@ -1,5 +1,5 @@
 mod ADSR;
-use ADSR::{Adsr, CurveType};
+use ADSR::{EnvelopeParams, is_finished, value_at};
 use nih_plug_webview::*;
 
 use nih_plug::prelude::*;
@@ -25,6 +25,63 @@ const DEFAULT_DECAY: f32 = 0.05;
 const DEFAULT_SUSTAIN: f32 = 0.7;
 const DEFAULT_RELEASE: f32 = 0.1;
 
+// Default per-oscillator ADSR constants for NXO entries
+const DEFAULT_V: f32 = 1.0;
+const DEFAULT_A: f32 = 0.005;
+const DEFAULT_D: f32 = 0.005;
+const DEFAULT_S: f32 = 1.0;
+const DEFAULT_R: f32 = 0.005;
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawOscillatorParams {
+    v: f32,
+    a: f32,
+    d: f32,
+    s: f32,
+    r: f32,
+}
+
+#[derive(Debug, Clone)]
+struct OscillatorParams {
+    v: f32,
+    a: f32,
+    d: f32,
+    s: f32,
+    r: f32,
+}
+
+type RawNxoDefinition = HashMap<String, RawOscillatorParams>;
+type NxoDefinition = HashMap<f32, OscillatorParams>;
+
+impl TryFrom<RawNxoDefinition> for NxoDefinition {
+    type Error = &'static str;
+
+    fn try_from(raw: RawNxoDefinition) -> Result<Self, Self::Error> {
+        if raw.is_empty() {
+            return Err("NXO definition cannot be empty");
+        }
+
+        let mut out = HashMap::with_capacity(raw.len());
+        for (k, v) in raw {
+            let key: f32 = k.parse().map_err(|_| "Invalid frequency multiplier")?;
+            if !key.is_finite() {
+                return Err("Invalid frequency multiplier");
+            }
+            out.insert(
+                key,
+                OscillatorParams {
+                    v: v.v,
+                    a: v.a,
+                    d: v.d,
+                    s: v.s,
+                    r: v.r,
+                },
+            );
+        }
+        Ok(out)
+    }
+}
+
 /// Plugin parameters: only Gain param here
 #[derive(Params)]
 struct PluginParams {
@@ -34,13 +91,13 @@ struct PluginParams {
 }
 
 impl Default for PluginParams {
-    fn default() -> Self {        let gain_value_changed = Arc::new(AtomicBool::new(false));
+    fn default() -> Self {
+        let gain_value_changed = Arc::new(AtomicBool::new(false));
 
         let v = gain_value_changed.clone();
         let param_callback = Arc::new(move |_: f32| {
             v.store(true, Ordering::Relaxed);
         });
-
 
         PluginParams {
             gain: FloatParam::new(
@@ -54,9 +111,8 @@ impl Default for PluginParams {
             .with_smoother(SmoothingStyle::Linear(3.0))
             .with_step_size(0.01)
             .with_unit(" dB")
-            .with_callback(param_callback.clone())
-            ,
-             gain_value_changed
+            .with_callback(param_callback.clone()),
+            gain_value_changed,
         }
     }
 }
@@ -67,8 +123,12 @@ enum Action {
     Init,
     QueryCargoPackageVersion,
     QueryGain,
-    SetGainDB { gain: f32 },
-    
+    SetGainDB {
+        gain: f32,
+    },
+    SetNxoDefinition {
+        definition: HashMap<String, RawOscillatorParams>,
+    },
 }
 
 struct Voice {
@@ -76,58 +136,78 @@ struct Voice {
     freq: f32,
     phase: f32,
     sample_rate: f32,
-    env: Adsr,
     start_ts: u64,
+    release_ts: Option<u64>,
 }
 
 impl Voice {
     pub fn new(sr: f32) -> Self {
-        let mut env = Adsr::new(
-            DEFAULT_ATTACK,
-            DEFAULT_DECAY,
-            DEFAULT_SUSTAIN,
-            DEFAULT_RELEASE,
-            sr,
-            CurveType::Exponential,
-        );
-        env.set_attack_time(DEFAULT_ATTACK);
-        env.set_decay_time(DEFAULT_DECAY);
-        env.set_sustain_level(DEFAULT_SUSTAIN);
-        env.set_release_time(DEFAULT_RELEASE);
         Self {
             note_id: 0,
             freq: 0.0,
             phase: 0.0,
             sample_rate: sr,
-            env,
             start_ts: 0,
+            release_ts: None,
         }
     }
 
     pub fn trigger(&mut self, note: u8, _velocity: f32, timestamp: u64) {
         self.note_id = note;
         self.freq = util::midi_note_to_freq(note);
-        self.env.trigger();
         self.start_ts = timestamp;
+        self.release_ts = None;
     }
 
-    pub fn release(&mut self) {
-        self.env.release();
+    pub fn release(&mut self, timestamp: u64) {
+        if self.release_ts.is_none() {
+            self.release_ts = Some(timestamp);
+        }
     }
 
-    pub fn next_sample(&mut self) -> f32 {
-        let amp = self.env.next();
+    pub fn next_sample(&mut self, now_ts: u64) -> f32 {
+        let params = EnvelopeParams {
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
+        };
+        let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
+        let note_off = self
+            .release_ts
+            .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
+        let amp = value_at(t, note_off, &params);
         let delta = self.freq / self.sample_rate;
         let val = (self.phase * std::f32::consts::TAU).sin() * amp;
         self.phase = (self.phase + delta) % 1.0;
         val
     }
 
-    pub fn is_released_and_done(&self) -> bool {
-        self.env.is_finished()
+    pub fn is_released_and_done(&self, now_ts: u64) -> bool {
+        let params = EnvelopeParams {
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
+        };
+        let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
+        let note_off = self
+            .release_ts
+            .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
+        is_finished(t, note_off, &params)
     }
-    pub fn get_amplitude(&self) -> f32 {
-        self.env.get_level()
+    pub fn get_amplitude(&self, now_ts: u64) -> f32 {
+        let params = EnvelopeParams {
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
+        };
+        let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
+        let note_off = self
+            .release_ts
+            .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
+        value_at(t, note_off, &params)
     }
 }
 
@@ -137,6 +217,7 @@ pub struct HarmonicNxo {
     voices: Vec<Voice>,
     active_voices: HashMap<u8, usize>,
     queue: VecDeque<usize>,
+    nxo_definition: Arc<Mutex<NxoDefinition>>,
     ts: u64,
     midi_states: Arc<Vec<AtomicBool>>,
     last_midi_send: Arc<Mutex<Instant>>,
@@ -144,12 +225,25 @@ pub struct HarmonicNxo {
 
 impl Default for HarmonicNxo {
     fn default() -> Self {
+        let mut nxo = HashMap::new();
+        nxo.insert(
+            1.0,
+            OscillatorParams {
+                v: DEFAULT_V,
+                a: DEFAULT_A,
+                d: DEFAULT_D,
+                s: DEFAULT_S,
+                r: DEFAULT_R,
+            },
+        );
+
         Self {
             params: Arc::new(PluginParams::default()),
             sample_rate: 44100.0,
             voices: Vec::new(),
             active_voices: HashMap::new(),
             queue: VecDeque::new(),
+            nxo_definition: Arc::new(Mutex::new(nxo)),
             ts: 0,
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
@@ -213,7 +307,9 @@ impl Plugin for HarmonicNxo {
                                 .iter()
                                 .enumerate()
                                 .min_by(|(_, a), (_, b)| {
-                                    a.get_amplitude().partial_cmp(&b.get_amplitude()).unwrap()
+                                    a.get_amplitude(self.ts)
+                                        .partial_cmp(&b.get_amplitude(self.ts))
+                                        .unwrap()
                                 })
                                 .map(|(i, _)| i)
                                 .unwrap_or(0)
@@ -228,7 +324,7 @@ impl Plugin for HarmonicNxo {
                     }
                     NoteEvent::NoteOff { note, .. } => {
                         if let Some(&i) = self.active_voices.get(note) {
-                            self.voices[i].release();
+                            self.voices[i].release(self.ts);
                         }
                         if let Some(state) = self.midi_states.get(*note as usize) {
                             state.store(false, Ordering::Relaxed);
@@ -239,7 +335,7 @@ impl Plugin for HarmonicNxo {
             }
             let mut out_sample = 0.0;
             for v in &mut self.voices {
-                let voice_sample = v.next_sample();
+                let voice_sample = v.next_sample(self.ts);
                 if voice_sample != 0.0 {
                     let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
                     out_sample += voice_sample * gain;
@@ -256,6 +352,7 @@ impl Plugin for HarmonicNxo {
         let params = self.params.clone();
         let midi_states = self.midi_states.clone();
         let last_midi_send = self.last_midi_send.clone();
+        let nxo_def = self.nxo_definition.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
@@ -270,6 +367,12 @@ impl Plugin for HarmonicNxo {
                                 setter.begin_set_parameter(&params.gain);
                                 setter.set_parameter(&params.gain, gain);
                                 setter.end_set_parameter(&params.gain);
+                            }
+
+                            Action::SetNxoDefinition { definition } => {
+                                if let Ok(nxo) = NxoDefinition::try_from(definition) {
+                                    *nxo_def.lock().unwrap() = nxo;
+                                }
                             }
 
                             Action::Init => {
@@ -287,7 +390,6 @@ impl Plugin for HarmonicNxo {
                                     "gain": params.gain.value()
                                 }));
                             }
-
                         }
                     } else {
                         panic!("Invalid action received from web UI.")
@@ -315,8 +417,9 @@ impl Plugin for HarmonicNxo {
 
 impl HarmonicNxo {
     fn garbage_collect(&mut self) {
+        let ts = self.ts;
         self.active_voices
-            .retain(|_, &mut i| !self.voices[i].is_released_and_done());
+            .retain(|_, &mut i| !self.voices[i].is_released_and_done(ts));
     }
 }
 
@@ -327,7 +430,6 @@ impl Vst3Plugin for HarmonicNxo {
 }
 
 nih_export_vst3!(HarmonicNxo);
-
 
 impl ClapPlugin for HarmonicNxo {
     // Reverse‑DNS style, all lowercase, no spaces
