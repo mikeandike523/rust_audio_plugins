@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start-harmonic-nxo-gui-dev":".\\__git_bash.exe scripts/start-harmonic-nxo-gui-dev.sh",
-    "bundle-harmonic-nxo-release":".\\__git_bash.exe scripts/bundle-harmonic-nxo-release.sh"
+    "start-harmonic-nxo-gui-dev":".\\__git_bash.bat scripts/start-harmonic-nxo-gui-dev.sh",
+    "bundle-harmonic-nxo-release":".\\__git_bash.bat scripts/bundle-harmonic-nxo-release.sh"
 
   },
   "keywords": [],
