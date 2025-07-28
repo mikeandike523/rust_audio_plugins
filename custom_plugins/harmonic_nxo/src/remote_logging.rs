@@ -1,7 +1,6 @@
 use serde::Serialize;
 use std::time::Duration;
 
-#[derive(Clone)]
 /// Helper for sending JSON logs to a local web server.
 ///
 /// The logger is best-effort: if the server isn't reachable then any errors are
