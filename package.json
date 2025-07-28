@@ -6,10 +6,15 @@
   "scripts": {
     "start-harmonic-nxo-gui-dev":".\\__git_bash.bat scripts/start-harmonic-nxo-gui-dev.sh",
     "bundle-harmonic-nxo-release":".\\__git_bash.bat scripts/bundle-harmonic-nxo-release.sh"
-
+    ,"start-log-server":"node scripts/log-server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.11.0"
+  "packageManager": "pnpm@10.11.0",
+  "dependencies": {
+    "express": "^4.18.2",
+    "pino": "^8.17.0",
+    "pino-pretty": "^10.3.1"
+  }
 }

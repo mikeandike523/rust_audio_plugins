@@ -1,5 +1,7 @@
 mod ADSR;
+mod remote_logging;
 use ADSR::{EnvelopeParams, is_finished, value_at};
+use remote_logging::RemoteLogger;
 use nih_plug_webview::*;
 
 use nih_plug::prelude::*;
@@ -241,6 +243,7 @@ pub struct HarmonicNxo {
     ts: u64,
     midi_states: Arc<Vec<AtomicBool>>,
     last_midi_send: Arc<Mutex<Instant>>,
+    remote_logger: RemoteLogger,
 }
 
 impl Default for HarmonicNxo {
@@ -255,6 +258,7 @@ impl Default for HarmonicNxo {
             ts: 0,
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
+            remote_logger: RemoteLogger::new(9099),
         }
     }
 }
@@ -361,6 +365,7 @@ impl Plugin for HarmonicNxo {
         let midi_states = self.midi_states.clone();
         let last_midi_send = self.last_midi_send.clone();
         let nxo_def = self.nxo_definition.clone();
+        let logger = self.remote_logger.clone();
         let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
@@ -378,8 +383,12 @@ impl Plugin for HarmonicNxo {
                             }
 
                             Action::SetNxoDefinition { definition } => {
-                                if let Ok(nxo) = NxoDefinition::try_from(definition) {
+                                if let Ok(nxo) = NxoDefinition::try_from(definition.clone()) {
                                     *nxo_def.lock().unwrap() = nxo;
+                                    logger.log(&json!({
+                                        "event": "SetNxoDefinition",
+                                        "definition": definition
+                                    }));
                                 }
                             }
 
