@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ordered_float::OrderedFloat;
 
@@ -35,7 +35,7 @@ const DEFAULT_D: f32 = 0.005;
 const DEFAULT_S: f32 = 1.0;
 const DEFAULT_R: f32 = 0.005;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct RawOscillatorParams {
     v: f32,
     a: f32,
