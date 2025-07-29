@@ -332,6 +332,9 @@ impl Plugin for HarmonicNxo {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = config.sample_rate;
+        for voice in &mut self.voices {
+            voice.sample_rate = self.sample_rate;
+        }
         if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
             &self.params.nxo_definition.lock().unwrap()
         ) {
@@ -340,6 +343,12 @@ impl Plugin for HarmonicNxo {
             }
         }
         true
+    }
+
+    fn reset(&mut self) {
+        for voice in &mut self.voices {
+            voice.sample_rate = self.sample_rate;
+        }
     }
 
     fn process(
