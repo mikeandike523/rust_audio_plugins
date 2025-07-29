@@ -1,8 +1,8 @@
 mod ADSR;
 mod remote_logging;
 use ADSR::{EnvelopeParams, is_finished, value_at};
-use remote_logging::RemoteLogger;
 use nih_plug_webview::*;
+use remote_logging::RemoteLogger;
 
 use nih_plug::prelude::*;
 use std::{
@@ -14,9 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use ordered_float::OrderedFloat;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -187,49 +187,60 @@ impl Voice {
         }
     }
 
-    pub fn next_sample(&mut self, now_ts: u64) -> f32 {
-        let params = EnvelopeParams {
-            attack: DEFAULT_ATTACK,
-            decay: DEFAULT_DECAY,
-            sustain: DEFAULT_SUSTAIN,
-            release: DEFAULT_RELEASE,
-        };
+    pub fn next_sample(&mut self, now_ts: u64, nxo: &NxoDefinition) -> f32 {
         let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
         let note_off = self
             .release_ts
             .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
-        let amp = value_at(t, note_off, &params);
+
+        let mut val = 0.0;
+        for (mul, params) in &nxo.0 {
+            let env = EnvelopeParams {
+                attack: params.a,
+                decay: params.d,
+                sustain: params.s,
+                release: params.r,
+            };
+            let amp = value_at(t, note_off, &env) * params.v;
+            val += (self.phase * mul.0 * std::f32::consts::TAU).sin() * amp;
+        }
+
         let delta = self.freq / self.sample_rate;
-        let val = (self.phase * std::f32::consts::TAU).sin() * amp;
         self.phase = (self.phase + delta) % 1.0;
         val
     }
 
-    pub fn is_released_and_done(&self, now_ts: u64) -> bool {
-        let params = EnvelopeParams {
-            attack: DEFAULT_ATTACK,
-            decay: DEFAULT_DECAY,
-            sustain: DEFAULT_SUSTAIN,
-            release: DEFAULT_RELEASE,
-        };
+    pub fn is_released_and_done(&self, now_ts: u64, nxo: &NxoDefinition) -> bool {
         let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
         let note_off = self
             .release_ts
             .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
-        is_finished(t, note_off, &params)
+
+        nxo.0.values().all(|params| {
+            let env = EnvelopeParams {
+                attack: params.a,
+                decay: params.d,
+                sustain: params.s,
+                release: params.r,
+            };
+            is_finished(t, note_off, &env)
+        })
     }
-    pub fn get_amplitude(&self, now_ts: u64) -> f32 {
-        let params = EnvelopeParams {
-            attack: DEFAULT_ATTACK,
-            decay: DEFAULT_DECAY,
-            sustain: DEFAULT_SUSTAIN,
-            release: DEFAULT_RELEASE,
-        };
+    pub fn get_amplitude(&self, now_ts: u64, nxo: &NxoDefinition) -> f32 {
         let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
         let note_off = self
             .release_ts
             .map(|off| (off - self.start_ts) as f32 / self.sample_rate);
-        value_at(t, note_off, &params)
+
+        nxo.0.values().fold(0.0, |acc, params| {
+            let env = EnvelopeParams {
+                attack: params.a,
+                decay: params.d,
+                sustain: params.s,
+                release: params.r,
+            };
+            acc + value_at(t, note_off, &env) * params.v
+        })
     }
 }
 
@@ -303,6 +314,7 @@ impl Plugin for HarmonicNxo {
         while let Some(evt) = context.next_event() {
             events.push(evt);
         }
+        let nxo = { self.nxo_definition.lock().unwrap().clone() };
         for (sample_id, mut channels) in buffer.iter_samples().enumerate() {
             self.ts = self.ts.wrapping_add(1);
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -319,8 +331,8 @@ impl Plugin for HarmonicNxo {
                                 .iter()
                                 .enumerate()
                                 .min_by(|(_, a), (_, b)| {
-                                    a.get_amplitude(self.ts)
-                                        .partial_cmp(&b.get_amplitude(self.ts))
+                                    a.get_amplitude(self.ts, &nxo)
+                                        .partial_cmp(&b.get_amplitude(self.ts, &nxo))
                                         .unwrap()
                                 })
                                 .map(|(i, _)| i)
@@ -347,7 +359,7 @@ impl Plugin for HarmonicNxo {
             }
             let mut out_sample = 0.0;
             for v in &mut self.voices {
-                let voice_sample = v.next_sample(self.ts);
+                let voice_sample = v.next_sample(self.ts, &nxo);
                 if voice_sample != 0.0 {
                     let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
                     out_sample += voice_sample * gain;
@@ -435,8 +447,9 @@ impl Plugin for HarmonicNxo {
 impl HarmonicNxo {
     fn garbage_collect(&mut self) {
         let ts = self.ts;
+        let nxo = { self.nxo_definition.lock().unwrap().clone() };
         self.active_voices
-            .retain(|_, &mut i| !self.voices[i].is_released_and_done(ts));
+            .retain(|_, &mut i| !self.voices[i].is_released_and_done(ts, &nxo));
     }
 }
 
