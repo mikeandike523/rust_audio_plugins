@@ -19,6 +19,7 @@ import {
 function App() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const workerRef = useRef<Worker>(undefined);
+  const [code, setCode] = useState<string>(exampleLuaGuitar);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [compileResult, setCompileResult] = useState<NXODefinition | null>(
     null
@@ -34,6 +35,21 @@ function App() {
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
   };
+
+  const sendCodeToPlugin = useMemo(
+    () =>
+      lodash.debounce(
+        (c: string) => {
+          const win = window as object as NIHPlugWebviewWindow;
+          if (typeof win.sendToPlugin === "function") {
+            win.sendToPlugin({ type: "SetLuaCode", code: c });
+          }
+        },
+        100,
+        { trailing: true }
+      ),
+    []
+  );
 
   useEffect(() => {
     workerRef.current = new Worker(
@@ -117,6 +133,12 @@ Return value should be a lua table which is akin to the following typescript typ
       RespondGain: async (payload: { gain: number }) => {
         setGain(payload.gain);
       },
+      RespondLuaCode: async (payload: { code: string }) => {
+        setCode(payload.code);
+      },
+      RespondNxoDefinition: async (payload: { definition: NXODefinition }) => {
+        setCompileResult(payload.definition);
+      },
       MidiStateUpdate: async (payload: { states: boolean[] }) => {
         if (midiStatesBackupRef.current.some((s) => s)) {
           setMidiStates(payload.states);
@@ -154,6 +176,12 @@ Return value should be a lua table which is akin to the following typescript typ
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryGain",
+    });
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type: "QueryLuaCode",
+    });
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type: "QueryNxoDefinition",
     });
   }, [ipcReady]);
 
@@ -302,7 +330,6 @@ Return value should be a lua table which is akin to the following typescript typ
             }
           `}
           onClick={() => {
-            const code = editorRef.current?.getValue() ?? "";
             setCompileError(null);
             setCompileResult(null);
             workerRef.current?.postMessage({ id: Date.now(), code });
@@ -317,7 +344,12 @@ Return value should be a lua table which is akin to the following typescript typ
           theme="vs-dark"
           height="100%"
           defaultLanguage="lua"
-          defaultValue={exampleLuaGuitar}
+          value={code}
+          onChange={(v) => {
+            const val = v ?? "";
+            setCode(val);
+            sendCodeToPlugin(val);
+          }}
           onMount={handleEditorDidMount}
           options={{
             wordWrap: "on",

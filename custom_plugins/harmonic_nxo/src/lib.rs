@@ -16,7 +16,7 @@ use std::{
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{self, json};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -110,6 +110,10 @@ struct PluginParams {
     #[id = "gain"]
     pub gain: FloatParam,
     gain_value_changed: Arc<AtomicBool>,
+    #[persist = "lua_code"]
+    pub lua_code: Arc<Mutex<String>>,
+    #[persist = "nxo_definition"]
+    pub nxo_definition: Arc<Mutex<String>>,
 }
 
 impl Default for PluginParams {
@@ -135,6 +139,18 @@ impl Default for PluginParams {
             .with_unit(" dB")
             .with_callback(param_callback.clone()),
             gain_value_changed,
+            lua_code: Arc::new(Mutex::new(include_str!("../web-gui/src/exampleLua/guitar.lua").to_string())),
+            nxo_definition: Arc::new(Mutex::new(serde_json::to_string(&{
+                let mut map = HashMap::new();
+                map.insert("1".to_string(), RawOscillatorParams {
+                    v: DEFAULT_V,
+                    a: DEFAULT_A,
+                    d: DEFAULT_D,
+                    s: DEFAULT_S,
+                    r: DEFAULT_R,
+                });
+                map
+            }).unwrap())),
         }
     }
 }
@@ -145,8 +161,13 @@ enum Action {
     Init,
     QueryCargoPackageVersion,
     QueryGain,
+    QueryLuaCode,
+    QueryNxoDefinition,
     SetGainDB {
         gain: f32,
+    },
+    SetLuaCode {
+        code: String,
     },
     SetNxoDefinition {
         definition: HashMap<String, RawOscillatorParams>,
@@ -259,13 +280,23 @@ pub struct HarmonicNxo {
 
 impl Default for HarmonicNxo {
     fn default() -> Self {
+        let params = Arc::new(PluginParams::default());
+        let initial_nxo = {
+            if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
+                &params.nxo_definition.lock().unwrap()
+            ) {
+                NxoDefinition::try_from(def).unwrap_or_default()
+            } else {
+                NxoDefinition::default()
+            }
+        };
         Self {
-            params: Arc::new(PluginParams::default()),
+            params,
             sample_rate: 44100.0,
             voices: Vec::new(),
             active_voices: HashMap::new(),
             queue: VecDeque::new(),
-            nxo_definition: Arc::new(Mutex::new(NxoDefinition::default())),
+            nxo_definition: Arc::new(Mutex::new(initial_nxo)),
             ts: 0,
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
@@ -301,6 +332,13 @@ impl Plugin for HarmonicNxo {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = config.sample_rate;
+        if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
+            &self.params.nxo_definition.lock().unwrap()
+        ) {
+            if let Ok(nxo) = NxoDefinition::try_from(def) {
+                *self.nxo_definition.lock().unwrap() = nxo;
+            }
+        }
         true
     }
 
@@ -394,9 +432,15 @@ impl Plugin for HarmonicNxo {
                                 setter.end_set_parameter(&params.gain);
                             }
 
+                            Action::SetLuaCode { code } => {
+                                *params.lua_code.lock().unwrap() = code;
+                            }
+
                             Action::SetNxoDefinition { definition } => {
                                 if let Ok(nxo) = NxoDefinition::try_from(definition.clone()) {
                                     *nxo_def.lock().unwrap() = nxo;
+                                    *params.nxo_definition.lock().unwrap() =
+                                        serde_json::to_string(&definition).unwrap();
                                     logger.log(&json!({
                                         "event": "SetNxoDefinition",
                                         "definition": definition
@@ -418,6 +462,23 @@ impl Plugin for HarmonicNxo {
                                     "type": "RespondGain",
                                     "gain": params.gain.value()
                                 }));
+                            }
+                            Action::QueryLuaCode => {
+                                let code = params.lua_code.lock().unwrap().clone();
+                                ctx.send_json(json!({
+                                    "type": "RespondLuaCode",
+                                    "code": code
+                                }));
+                            }
+                            Action::QueryNxoDefinition => {
+                                if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
+                                    &params.nxo_definition.lock().unwrap()
+                                ) {
+                                    ctx.send_json(json!({
+                                        "type": "RespondNxoDefinition",
+                                        "definition": def
+                                    }));
+                                }
                             }
                         }
                     } else {
