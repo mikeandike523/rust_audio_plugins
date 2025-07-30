@@ -425,7 +425,13 @@ impl Plugin for HarmonicNxo {
         let last_midi_send = self.last_midi_send.clone();
         let nxo_def = self.nxo_definition.clone();
         let logger = self.remote_logger.clone();
-        let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
+        let url = if cfg!(debug_assertions) {
+            "http://localhost:3000"
+        } else {
+            "https://wth-plugins-harmonic-nxo.vercel.app"
+        };
+
+        let editor = WebViewEditor::new(HTMLSource::URL(url), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
