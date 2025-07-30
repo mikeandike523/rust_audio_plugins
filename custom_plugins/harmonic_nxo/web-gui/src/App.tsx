@@ -32,7 +32,7 @@ function App() {
     new Array(128).fill(false)
   );
 
-  const handleEditorDidMount: OnMount = (editor, monaco) => {
+  const handleEditorDidMount: OnMount = (editor, ) => {
     editorRef.current = editor;
   };
 

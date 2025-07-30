@@ -11,7 +11,6 @@ export interface PianoWidgetProps extends DivProps {
 const WHITE_KEY_ASPECT_RATIO = 1 / 8;
 const FIRST_MIDI = 21;  // A0
 const LAST_MIDI = 108;  // C8
-const TOTAL_PIANO_NOTES = LAST_MIDI - FIRST_MIDI + 1; // 88
 const BLACK_NOTE_OFFSETS = new Set([1, 3, 6, 8, 10]); // semitone offsets that are black
 
 const isBlack = (midi: number) => BLACK_NOTE_OFFSETS.has(midi % 12);
