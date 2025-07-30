@@ -139,18 +139,26 @@ impl Default for PluginParams {
             .with_unit(" dB")
             .with_callback(param_callback.clone()),
             gain_value_changed,
-            lua_code: Arc::new(Mutex::new(include_str!("../web-gui/src/exampleLua/guitar.lua").to_string())),
-            nxo_definition: Arc::new(Mutex::new(serde_json::to_string(&{
-                let mut map = HashMap::new();
-                map.insert("1".to_string(), RawOscillatorParams {
-                    v: DEFAULT_V,
-                    a: DEFAULT_A,
-                    d: DEFAULT_D,
-                    s: DEFAULT_S,
-                    r: DEFAULT_R,
-                });
-                map
-            }).unwrap())),
+            lua_code: Arc::new(Mutex::new(
+                include_str!("../web-gui/src/exampleLua/guitar.lua").to_string(),
+            )),
+            nxo_definition: Arc::new(Mutex::new(
+                serde_json::to_string(&{
+                    let mut map = HashMap::new();
+                    map.insert(
+                        "1".to_string(),
+                        RawOscillatorParams {
+                            v: DEFAULT_V,
+                            a: DEFAULT_A,
+                            d: DEFAULT_D,
+                            s: DEFAULT_S,
+                            r: DEFAULT_R,
+                        },
+                    );
+                    map
+                })
+                .unwrap(),
+            )),
         }
     }
 }
@@ -283,7 +291,7 @@ impl Default for HarmonicNxo {
         let params = Arc::new(PluginParams::default());
         let initial_nxo = {
             if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-                &params.nxo_definition.lock().unwrap()
+                &params.nxo_definition.lock().unwrap(),
             ) {
                 NxoDefinition::try_from(def).unwrap_or_default()
             } else {
@@ -336,7 +344,7 @@ impl Plugin for HarmonicNxo {
             voice.sample_rate = self.sample_rate;
         }
         if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-            &self.params.nxo_definition.lock().unwrap()
+            &self.params.nxo_definition.lock().unwrap(),
         ) {
             if let Ok(nxo) = NxoDefinition::try_from(def) {
                 *self.nxo_definition.lock().unwrap() = nxo;
@@ -425,7 +433,13 @@ impl Plugin for HarmonicNxo {
         let last_midi_send = self.last_midi_send.clone();
         let nxo_def = self.nxo_definition.clone();
         let logger = self.remote_logger.clone();
-        let editor = WebViewEditor::new(HTMLSource::URL("http://localhost:5173"), (1000, 750))
+        let url = if cfg!(debug_assertions) {
+            "http://localhost:3000"
+        } else {
+            "https://wth-plugins-harmonic-nxo.vercel.app"
+        };
+
+        let editor = WebViewEditor::new(HTMLSource::URL(url), (1000, 750))
             .with_developer_mode(true)
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
@@ -480,9 +494,11 @@ impl Plugin for HarmonicNxo {
                                 }));
                             }
                             Action::QueryNxoDefinition => {
-                                if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-                                    &params.nxo_definition.lock().unwrap()
-                                ) {
+                                if let Ok(def) =
+                                    serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
+                                        &params.nxo_definition.lock().unwrap(),
+                                    )
+                                {
                                     ctx.send_json(json!({
                                         "type": "RespondNxoDefinition",
                                         "definition": def
