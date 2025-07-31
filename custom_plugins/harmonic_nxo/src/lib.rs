@@ -35,6 +35,42 @@ const DEFAULT_D: f32 = 0.005;
 const DEFAULT_S: f32 = 1.0;
 const DEFAULT_R: f32 = 0.005;
 
+/// Compile the bundled example Lua file into an NXO definition.
+///
+/// This replicates the Lua script's algorithm in Rust so that the example can
+/// be compiled on first launch without relying on an embedded Lua interpreter.
+fn compile_example_nxo_json() -> String {
+    let base_amp_db = -6.0f32;
+    let amp_step_db = -3.0f32;
+    let base_sus_db = -12.0f32;
+    let sus_step_db = -2.0f32;
+    let attack_seconds = 0.005f32;
+    let decay_seconds = 0.1f32;
+    let base_rel_sec = 0.5f32;
+    let rel_step_sec = -0.05f32;
+
+    let mut map = HashMap::new();
+    for i in 1..=6 {
+        let n = i as f32;
+        let peak_db = base_amp_db + (n - 1.0) * amp_step_db;
+        let sus_db = base_sus_db + (n - 1.0) * sus_step_db;
+        let rel = (base_rel_sec + (n - 1.0) * rel_step_sec).max(0.0);
+
+        map.insert(
+            i.to_string(),
+            RawOscillatorParams {
+                v: 10f32.powf(peak_db / 20.0),
+                a: attack_seconds,
+                d: decay_seconds,
+                s: 10f32.powf(sus_db / 20.0),
+                r: rel,
+            },
+        );
+    }
+
+    serde_json::to_string(&map).unwrap()
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct RawOscillatorParams {
     v: f32,
@@ -113,7 +149,7 @@ struct PluginParams {
     #[persist = "lua_code"]
     pub lua_code: Arc<Mutex<String>>,
     #[persist = "nxo_definition"]
-    pub nxo_definition: Arc<Mutex<String>>,
+    pub nxo_definition: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for PluginParams {
@@ -142,23 +178,7 @@ impl Default for PluginParams {
             lua_code: Arc::new(Mutex::new(
                 include_str!("../web-gui/src/exampleLua/guitar.lua").to_string(),
             )),
-            nxo_definition: Arc::new(Mutex::new(
-                serde_json::to_string(&{
-                    let mut map = HashMap::new();
-                    map.insert(
-                        "1".to_string(),
-                        RawOscillatorParams {
-                            v: DEFAULT_V,
-                            a: DEFAULT_A,
-                            d: DEFAULT_D,
-                            s: DEFAULT_S,
-                            r: DEFAULT_R,
-                        },
-                    );
-                    map
-                })
-                .unwrap(),
-            )),
+            nxo_definition: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -290,12 +310,19 @@ impl Default for HarmonicNxo {
     fn default() -> Self {
         let params = Arc::new(PluginParams::default());
         let initial_nxo = {
-            if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-                &params.nxo_definition.lock().unwrap(),
-            ) {
-                NxoDefinition::try_from(def).unwrap_or_default()
+            let mut guard = params.nxo_definition.lock().unwrap();
+            if let Some(json) = guard.as_ref() {
+                if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(json)
+                {
+                    NxoDefinition::try_from(def).unwrap_or_default()
+                } else {
+                    NxoDefinition::default()
+                }
             } else {
-                NxoDefinition::default()
+                let compiled = compile_example_nxo_json();
+                *guard = Some(compiled.clone());
+                let def = serde_json::from_str(&compiled).unwrap();
+                NxoDefinition::try_from(def).unwrap_or_default()
             }
         };
         Self {
@@ -343,11 +370,21 @@ impl Plugin for HarmonicNxo {
         for voice in &mut self.voices {
             voice.sample_rate = self.sample_rate;
         }
-        if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-            &self.params.nxo_definition.lock().unwrap(),
-        ) {
-            if let Ok(nxo) = NxoDefinition::try_from(def) {
-                *self.nxo_definition.lock().unwrap() = nxo;
+        let mut guard = self.params.nxo_definition.lock().unwrap();
+        if let Some(json) = guard.as_ref() {
+            if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(json) {
+                if let Ok(nxo) = NxoDefinition::try_from(def) {
+                    *self.nxo_definition.lock().unwrap() = nxo;
+                }
+            }
+        } else {
+            let compiled = compile_example_nxo_json();
+            *guard = Some(compiled.clone());
+            if let Ok(def) = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(&compiled)
+            {
+                if let Ok(nxo) = NxoDefinition::try_from(def) {
+                    *self.nxo_definition.lock().unwrap() = nxo;
+                }
             }
         }
         true
@@ -463,7 +500,7 @@ impl Plugin for HarmonicNxo {
                                 if let Ok(nxo) = NxoDefinition::try_from(definition.clone()) {
                                     *nxo_def.lock().unwrap() = nxo;
                                     *params.nxo_definition.lock().unwrap() =
-                                        serde_json::to_string(&definition).unwrap();
+                                        Some(serde_json::to_string(&definition).unwrap());
                                     logger.log(&json!({
                                         "event": "SetNxoDefinition",
                                         "definition": definition
@@ -494,15 +531,18 @@ impl Plugin for HarmonicNxo {
                                 }));
                             }
                             Action::QueryNxoDefinition => {
-                                if let Ok(def) =
-                                    serde_json::from_str::<HashMap<String, RawOscillatorParams>>(
-                                        &params.nxo_definition.lock().unwrap(),
-                                    )
+                                if let Some(json) =
+                                    params.nxo_definition.lock().unwrap().as_ref().cloned()
                                 {
-                                    ctx.send_json(json!({
-                                        "type": "RespondNxoDefinition",
-                                        "definition": def
-                                    }));
+                                    if let Ok(def) = serde_json::from_str::<
+                                        HashMap<String, RawOscillatorParams>,
+                                    >(&json)
+                                    {
+                                        ctx.send_json(json!({
+                                            "type": "RespondNxoDefinition",
+                                            "definition": def
+                                        }));
+                                    }
                                 }
                             }
                         }
