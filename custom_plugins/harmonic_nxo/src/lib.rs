@@ -321,7 +321,7 @@ impl Default for HarmonicNxo {
             } else {
                 let compiled = compile_example_nxo_json();
                 *guard = Some(compiled.clone());
-                let def = serde_json::from_str(&compiled).unwrap();
+                let def = serde_json::from_str::<HashMap<String, RawOscillatorParams>>(&compiled).unwrap();
                 NxoDefinition::try_from(def).unwrap_or_default()
             }
         };
