@@ -35,6 +35,13 @@ const DEFAULT_D: f32 = 0.005;
 const DEFAULT_S: f32 = 1.0;
 const DEFAULT_R: f32 = 0.005;
 
+fn velocity_to_gain(velocity: f32) -> f32 {
+    let v = velocity.clamp(0.0, 1.0);
+    // Use a simple curve giving about 40 dB of dynamic range
+    let db = (v.powf(2.0) * 40.0) - 40.0;
+    util::db_to_gain_fast_branching(db)
+}
+
 /// Compile the bundled example Lua file into an NXO definition.
 ///
 /// This replicates the Lua script's algorithm in Rust so that the example can
@@ -209,6 +216,7 @@ struct Voice {
     sample_rate: f32,
     start_ts: u64,
     release_ts: Option<u64>,
+    velocity_gain: f32,
 }
 
 impl Voice {
@@ -220,14 +228,16 @@ impl Voice {
             sample_rate: sr,
             start_ts: 0,
             release_ts: None,
+            velocity_gain: 1.0,
         }
     }
 
-    pub fn trigger(&mut self, note: u8, _velocity: f32, timestamp: u64) {
+    pub fn trigger(&mut self, note: u8, velocity: f32, timestamp: u64) {
         self.note_id = note;
         self.freq = util::midi_note_to_freq(note);
         self.start_ts = timestamp;
         self.release_ts = None;
+        self.velocity_gain = velocity_to_gain(velocity);
     }
 
     pub fn release(&mut self, timestamp: u64) {
@@ -250,7 +260,7 @@ impl Voice {
                 sustain: params.s,
                 release: params.r,
             };
-            let amp = value_at(t, note_off, &env) * params.v;
+            let amp = value_at(t, note_off, &env) * params.v * self.velocity_gain;
             val += (self.phase * mul.0 * std::f32::consts::TAU).sin() * amp;
         }
 
@@ -289,7 +299,7 @@ impl Voice {
                 release: params.r,
             };
             acc + value_at(t, note_off, &env) * params.v
-        })
+        }) * self.velocity_gain
     }
 }
 
