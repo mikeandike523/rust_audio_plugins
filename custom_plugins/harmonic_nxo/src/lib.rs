@@ -419,16 +419,37 @@ impl Plugin for HarmonicNxo {
                             self.queue.push_back(i);
                             i
                         } else {
+                            // When several notes arrive on the same sample we
+                            // may end up stealing the voice that was just
+                            // allocated for the previous note because its
+                            // amplitude is still zero. To avoid this we first
+                            // try to pick a voice that was not triggered on
+                            // the current sample.
                             self.voices
                                 .iter()
                                 .enumerate()
+                                .filter(|(_, v)| v.start_ts != self.ts || v.release_ts.is_some())
                                 .min_by(|(_, a), (_, b)| {
                                     a.get_amplitude(self.ts, &nxo)
                                         .partial_cmp(&b.get_amplitude(self.ts, &nxo))
                                         .unwrap()
                                 })
                                 .map(|(i, _)| i)
-                                .unwrap_or(0)
+                                // If all voices were started this sample then
+                                // fall back to the normal amplitude based
+                                // selection.
+                                .unwrap_or_else(|| {
+                                    self.voices
+                                        .iter()
+                                        .enumerate()
+                                        .min_by(|(_, a), (_, b)| {
+                                            a.get_amplitude(self.ts, &nxo)
+                                                .partial_cmp(&b.get_amplitude(self.ts, &nxo))
+                                                .unwrap()
+                                        })
+                                        .map(|(i, _)| i)
+                                        .unwrap_or(0)
+                                })
                         };
                         self.queue.retain(|&i| i != idx);
                         self.queue.push_back(idx);
