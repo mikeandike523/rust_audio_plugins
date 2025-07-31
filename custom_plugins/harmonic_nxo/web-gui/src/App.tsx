@@ -17,6 +17,11 @@ import {
 } from "./utils/validateLuaResult";
 
 function App() {
+
+  // Detect Vite environment
+  const url = window.location.href;
+
+
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const workerRef = useRef<Worker>(undefined);
   const [code, setCode] = useState<string>(exampleLuaGuitar);
@@ -224,7 +229,6 @@ Return value should be a lua table which is akin to the following typescript typ
       >
         <P
           fontSize="1rem"
-          width="12rem"
           fontStyle="italic"
           fontWeight="bold"
           color="white"
@@ -288,7 +292,7 @@ Return value should be a lua table which is akin to the following typescript typ
             </Div>
           )}
         </Div>
-        <P visibility="hidden" width="12rem"></P>
+        <P >{url}</P>
       </Div>
       <Div
         width="100dvw"

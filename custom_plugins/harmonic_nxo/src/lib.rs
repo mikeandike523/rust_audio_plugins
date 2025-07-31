@@ -470,10 +470,31 @@ impl Plugin for HarmonicNxo {
         let last_midi_send = self.last_midi_send.clone();
         let nxo_def = self.nxo_definition.clone();
         let logger = self.remote_logger.clone();
-        let url = if cfg!(debug_assertions) {
-            "http://localhost:3000"
-        } else {
-            "https://wth-plugins-harmonic-nxo.vercel.app"
+        let url = {
+            // Try to connect to local dev server with a 500ms timeout
+            let local_url = "http://localhost:5173";
+            let production_url = "https://wth-plugins-harmonic-nxo.vercel.app";
+            
+            match std::thread::spawn(move || {
+                use std::time::Duration;
+                let client = std::sync::Arc::new(
+                    ureq::AgentBuilder::new()
+                        .timeout_connect(Duration::from_millis(500))
+                        .timeout_read(Duration::from_millis(500))
+                        .build()
+                );
+                
+                client.get(local_url).call()
+            }).join() {
+                Ok(Ok(_)) => {
+                    println!("Local dev server detected at {}", local_url);
+                    local_url
+                },
+                _ => {
+                    println!("Local dev server not available, using production URL: {}", production_url);
+                    production_url
+                }
+            }
         };
 
         let editor = WebViewEditor::new(HTMLSource::URL(url), (1000, 750))
