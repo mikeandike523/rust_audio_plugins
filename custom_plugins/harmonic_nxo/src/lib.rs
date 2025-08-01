@@ -246,7 +246,7 @@ impl Voice {
         }
     }
 
-    pub fn next_sample(&mut self, now_ts: u64, nxo: &NxoDefinition) -> f32 {
+    pub fn next_sample(&mut self, now_ts: u64, nxo: &NxoDefinition, pitch_bend: f32, pitch_bend_range: f32) -> f32 {
         let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
         let note_off = self
             .release_ts
@@ -264,7 +264,10 @@ impl Voice {
             val += (self.phase * mul.0 * std::f32::consts::TAU).sin() * amp;
         }
 
-        let delta = self.freq / self.sample_rate;
+        // Apply pitch bend: convert normalized pitch bend to semitone offset and factor.
+        let semitone_offset = (pitch_bend - 0.5) * 2.0 * pitch_bend_range;
+        let bend_factor = 2.0f32.powf(semitone_offset / 12.0);
+        let delta = self.freq * bend_factor / self.sample_rate;
         self.phase = (self.phase + delta) % 1.0;
         val
     }
@@ -311,6 +314,10 @@ pub struct HarmonicNxo {
     queue: VecDeque<usize>,
     nxo_definition: Arc<Mutex<NxoDefinition>>,
     ts: u64,
+    /// Current normalized pitch bend value (0.5 = no bend).
+    pitch_bend: f32,
+    /// Pitch bend range in semitones.
+    pitch_bend_range: f32,
     midi_states: Arc<Vec<AtomicBool>>,
     last_midi_send: Arc<Mutex<Instant>>,
     remote_logger: RemoteLogger,
@@ -346,6 +353,8 @@ impl Default for HarmonicNxo {
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
             remote_logger: RemoteLogger::new(9099),
+            pitch_bend: 0.5,
+            pitch_bend_range: 2.0,
         }
     }
 }
@@ -361,7 +370,7 @@ impl Plugin for HarmonicNxo {
         main_output_channels: NonZeroU32::new(2),
         ..AudioIOLayout::const_default()
     }];
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
     type SysExMessage = ();
     type BackgroundTask = ();
@@ -421,6 +430,10 @@ impl Plugin for HarmonicNxo {
             self.ts = self.ts.wrapping_add(1);
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
                 match evt {
+                    NoteEvent::MidiPitchBend { value, .. } => {
+                        // Update current pitch bend value (normalized 0..1, 0.5 = no bend).
+                        self.pitch_bend = *value;
+                    }
                     NoteEvent::NoteOn { note, velocity, .. } => {
                         self.garbage_collect();
                         let idx = if self.voices.len() < MAX_VOICES {
@@ -482,7 +495,7 @@ impl Plugin for HarmonicNxo {
             }
             let mut out_sample = 0.0;
             for v in &mut self.voices {
-                let voice_sample = v.next_sample(self.ts, &nxo);
+                let voice_sample = v.next_sample(self.ts, &nxo, self.pitch_bend, self.pitch_bend_range);
                 if voice_sample != 0.0 {
                     let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
                     out_sample += voice_sample * gain;

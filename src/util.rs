@@ -102,6 +102,25 @@ pub fn freq_to_midi_note(freq: f32) -> f32 {
     ((freq / 440.0).log2() * 12.0) + 69.0
 }
 
+/// Convert a normalized MIDI pitch-bend value into a semitone offset.
+///
+/// The `value` is a normalized pitch-bend value in `[0, 1]`, where `0.5` means no bend.
+/// `range` is the maximum pitch-bend range in semitones (commonly ±2 semitones by default).
+/// The result is a linear semitone offset in `[-range, +range]`.
+#[inline]
+pub fn midi_pitch_bend_to_semitones(value: f32, range: f32) -> f32 {
+    (value - 0.5) * 2.0 * range
+}
+
+/// Convert a semitone offset into a normalized MIDI pitch-bend value.
+///
+/// `semitones` is the desired pitch offset in semitones and `range` is the maximum pitch-bend
+/// range in semitones. The returned value is normalized to `[0, 1]`, where `0.5` means no bend.
+#[inline]
+pub fn semitones_to_midi_pitch_bend(semitones: f32, range: f32) -> f32 {
+    (semitones / (2.0 * range)) + 0.5
+}
+
 #[cfg(test)]
 mod tests {
     mod db_gain_conversion {
@@ -191,6 +210,36 @@ mod tests {
         #[test]
         fn test_gain_to_db_minus_infinity_negative() {
             approx::assert_relative_eq!(gain_to_db(-2.0), gain_to_db_fast(-2.0), epsilon = 1e-7);
+        }
+    }
+
+    mod midi_pitch_bend_conversion {
+        use super::super::*;
+
+        #[test]
+        fn test_midi_pitch_bend_to_semitones_default_range() {
+            // Default ±2 semitones: 0.0 -> -2.0, 0.5 -> 0.0, 1.0 -> +2.0
+            assert_eq!(midi_pitch_bend_to_semitones(0.0, 2.0), -2.0);
+            assert_eq!(midi_pitch_bend_to_semitones(0.5, 2.0), 0.0);
+            assert_eq!(midi_pitch_bend_to_semitones(1.0, 2.0), 2.0);
+        }
+
+        #[test]
+        fn test_semitones_to_midi_pitch_bend_default_range() {
+            // Default ±2 semitones: -2.0 -> 0.0, 0.0 -> 0.5, 2.0 -> 1.0
+            assert_eq!(semitones_to_midi_pitch_bend(-2.0, 2.0), 0.0);
+            assert_eq!(semitones_to_midi_pitch_bend(0.0, 2.0), 0.5);
+            assert_eq!(semitones_to_midi_pitch_bend(2.0, 2.0), 1.0);
+        }
+
+        #[test]
+        fn test_bidirectional_pitch_bend_conversion() {
+            let range = 3.5;
+            for &v in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+                let semis = midi_pitch_bend_to_semitones(v, range);
+                let back = semitones_to_midi_pitch_bend(semis, range);
+                approx::assert_relative_eq!(back, v, epsilon = 1e-6);
+            }
         }
     }
 }
