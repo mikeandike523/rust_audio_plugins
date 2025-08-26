@@ -15,15 +15,14 @@ resolver = "2"
 members = [
   "nih_plug_derive",
   "nih_plug_xtask",
-
   "cargo_nih_plug",
   "xtask",
-
+  "nih-plug-webview",
+  "anymap-1.0.0-beta.2",
 
   "custom_plugins/harmonic_nxo",
-  "nih-plug-webview",
+  "custom_plugins/mixmean",
 
-  "anymap-1.0.0-beta.2"
 ]
 
 [features]
