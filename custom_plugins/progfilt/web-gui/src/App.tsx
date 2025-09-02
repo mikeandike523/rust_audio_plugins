@@ -6,110 +6,15 @@ import "../styles/sliders.css";
 import lodash from "lodash";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type monaco from "monaco-editor";
-import exampleLuaGuitar from "./exampleLua/guitar.lua?raw";
-import { MdPlayArrow } from "react-icons/md";
+
 import { css } from "@emotion/react";
-import PianoWidget from "./components/PianoWidget";
-import NXOTable from "./components/NXOTable";
-import {
-  isNXODefinition,
-  type NXODefinition,
-} from "./utils/validateLuaResult";
+
 
 function App() {
 
   // Detect Vite environment
   const url = window.location.href;
 
-
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const workerRef = useRef<Worker>(undefined);
-  const [code, setCode] = useState<string>(exampleLuaGuitar);
-  const [compileError, setCompileError] = useState<string | null>(null);
-  const [compileResult, setCompileResult] = useState<NXODefinition | null>(
-    null
-  );
-
-  const [midiStates, setMidiStates] = useState<Array<boolean>>(
-    new Array(128).fill(false)
-  );
-  const midiStatesBackupRef = useRef<Array<boolean>>(
-    new Array(128).fill(false)
-  );
-
-  const handleEditorDidMount: OnMount = (editor, ) => {
-    editorRef.current = editor;
-  };
-
-  const sendCodeToPlugin = useMemo(
-    () =>
-      lodash.debounce(
-        (c: string) => {
-          const win = window as object as NIHPlugWebviewWindow;
-          if (typeof win.sendToPlugin === "function") {
-            win.sendToPlugin({ type: "SetLuaCode", code: c });
-          }
-        },
-        100,
-        { trailing: true }
-      ),
-    []
-  );
-
-  useEffect(() => {
-    workerRef.current = new Worker(
-      new URL("./workers/luaWorker.ts", import.meta.url),
-      { type: "module" }
-    );
-    return () => workerRef.current?.terminate();
-  }, []);
-
-  useEffect(() => {
-    const worker = workerRef.current;
-    if (!worker) return;
-    const handler = (
-      e: MessageEvent<{ id: number; result?: unknown; error?: string }>
-    ) => {
-      if (e.data.error) {
-        setCompileError(e.data.error);
-        setCompileResult(null);
-      } else if (isNXODefinition(e.data.result)) {
-        setCompileError(null);
-        setCompileResult(e.data.result);
-        const win = window as object as NIHPlugWebviewWindow;
-        if (typeof win.sendToPlugin === "function") {
-          win.sendToPlugin({
-            type: "SetNxoDefinition",
-            definition: e.data.result,
-          });
-        }
-      } else {
-        setCompileError(
-`
-Invalid return shape.
-
-Return value should be a lua table which is akin to the following typescript type:
-
-{
-  [frequencyMultiplier: string|number]:
-    {
-      v: number;
-      a: number;
-      d: number;
-      s: number;
-      r: number;
-    }
-}
-`
-
-
-        );
-        setCompileResult(null);
-      }
-    };
-    worker.addEventListener("message", handler);
-    return () => worker.removeEventListener("message", handler);
-  }, []);
 
   const [ipcReady, setIpcReady] = useState(false);
 
@@ -138,23 +43,7 @@ Return value should be a lua table which is akin to the following typescript typ
       RespondGain: async (payload: { gain: number }) => {
         setGain(payload.gain);
       },
-      RespondLuaCode: async (payload: { code: string }) => {
-        setCode(payload.code);
-      },
-      RespondNxoDefinition: async (payload: { definition: NXODefinition }) => {
-        setCompileResult(payload.definition);
-      },
-      MidiStateUpdate: async (payload: { states: boolean[] }) => {
-        if (midiStatesBackupRef.current.some((s) => s)) {
-          setMidiStates(payload.states);
-          midiStatesBackupRef.current = [...payload.states];
-        } else {
-          if (payload.states.some((s) => s)) {
-            setMidiStates(payload.states);
-            midiStatesBackupRef.current = [...payload.states];
-          }
-        }
-      },
+
     };
   }, []) as object as Record<
     string,
@@ -181,12 +70,6 @@ Return value should be a lua table which is akin to the following typescript typ
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryGain",
-    });
-    (window as object as NIHPlugWebviewWindow).sendToPlugin({
-      type: "QueryLuaCode",
-    });
-    (window as object as NIHPlugWebviewWindow).sendToPlugin({
-      type: "QueryNxoDefinition",
     });
   }, [ipcReady]);
 
@@ -307,67 +190,9 @@ Return value should be a lua table which is akin to the following typescript typ
           Harmonic NXO
         </H1>
         <Div flex={1}></Div>
-        <Button
-          flex={0}
-          fontSize="1.25rem"
-          padding="0.25rem"
-          borderRadius="0.75rem"
-          border="2px solid white"
-          color="white"
-          display="flex"
-          flexDirection="row"
-          alignItems="center"
-          justifyContent="center"
-          cursor="pointer"
-          transformOrigin="center"
-          transition="transform 0.1s ease-in-out"
-          css={css`
-            transform: scale(1);
-            background: blue;
-            &:hover {
-              transform: scale(1.05);
-              background: lightblue;
-            }
-            &:active {
-              transform: scale(0.95);
-              background: green;
-            }
-          `}
-          onClick={() => {
-            setCompileError(null);
-            setCompileResult(null);
-            workerRef.current?.postMessage({ id: Date.now(), code });
-          }}
-        >
-          <Span>Compile</Span>
-          <MdPlayArrow />
-        </Button>
       </Div>
       <Div display="grid" gridTemplateColumns="1fr 1fr">
-        <Editor
-          theme="vs-dark"
-          height="100%"
-          defaultLanguage="lua"
-          value={code}
-          onChange={(v) => {
-            const val = v ?? "";
-            setCode(val);
-            sendCodeToPlugin(val);
-          }}
-          onMount={handleEditorDidMount}
-          options={{
-            wordWrap: "on",
-          }}
-        />
-        <Div padding="0.5rem" overflow="auto">
-          {compileError && <pre style={{ color: "red" }}>{compileError}</pre>}
-          {!compileError && compileResult && (
-            <NXOTable nxoDefinition={compileResult} />
-          )}
-        </Div>
       </Div>
-      {/* Piano Widget */}
-      <PianoWidget midiStates={midiStates} />
     </Div>
   );
 }
