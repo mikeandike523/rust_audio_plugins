@@ -1,4 +1,3 @@
-// custom_plugins/progfilt/src/lib.rs
 
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
