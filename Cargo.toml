@@ -22,6 +22,7 @@ members = [
 
   "custom_plugins/harmonic_nxo",
   "custom_plugins/mixmean",
+  "custom_plugins/progfilt",
 
 ]
 
