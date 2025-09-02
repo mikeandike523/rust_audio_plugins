@@ -43,7 +43,7 @@ impl Plugin for ProgFilt {
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         // WebView-based GUI (separate dev server or bundled)
         let editor = WebViewEditor::new(
-            HTMLSource::Url("http://localhost:5173"),
+            HTMLSource::URL("http://localhost:5173"),
             (800, 600),
         );
         Some(Box::new(editor))
@@ -52,7 +52,7 @@ impl Plugin for ProgFilt {
 
 // VST3 support
 impl Vst3Plugin for ProgFilt {
-    const VST3_CLASS_ID: [u8; 16] = *b"WTH_ProgFilt_FX__";
+    const VST3_CLASS_ID: [u8; 16] = *b"WTH_ProgFilt_FX_";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Fx,
         Vst3SubCategory::Stereo,
