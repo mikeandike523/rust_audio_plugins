@@ -187,7 +187,7 @@ function App() {
         justifyContent="flex-start"
       >
         <H1 flex={0} fontSize="1.5rem" whiteSpace="nowrap">
-          Harmonic NXO
+          ProgFilt
         </H1>
         <Div flex={1}></Div>
       </Div>
