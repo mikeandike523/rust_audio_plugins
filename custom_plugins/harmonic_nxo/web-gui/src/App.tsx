@@ -129,6 +129,13 @@ Return value should be a lua table which is akin to the following typescript typ
   const [cargoPackageVersion, setCargoPackageVersion] = useState("");
 
   const [gain, setGain] = useState<number | null>(null);
+  const [bendRangeCents, setBendRangeCents] = useState<number | null>(null);
+  const [tuningStatus, setTuningStatus] = useState<{
+    active: boolean;
+    scl_name?: string | null;
+    kbm_name?: string | null;
+    error?: string | null;
+  } | null>(null);
 
   const incomingMessageHandlers = useMemo(() => {
     return {
@@ -138,11 +145,24 @@ Return value should be a lua table which is akin to the following typescript typ
       RespondGain: async (payload: { gain: number }) => {
         setGain(payload.gain);
       },
+      RespondPitchBendRange: async (payload: { cents: number }) => {
+        setBendRangeCents(payload.cents);
+      },
       RespondLuaCode: async (payload: { code: string }) => {
         setCode(payload.code);
       },
       RespondNxoDefinition: async (payload: { definition: NXODefinition }) => {
         setCompileResult(payload.definition);
+      },
+      RespondTuningStatus: async (payload: {
+        status: {
+          active: boolean;
+          scl_name?: string | null;
+          kbm_name?: string | null;
+          error?: string | null;
+        };
+      }) => {
+        setTuningStatus(payload.status);
       },
       MidiStateUpdate: async (payload: { states: boolean[] }) => {
         if (midiStatesBackupRef.current.some((s) => s)) {
@@ -183,10 +203,16 @@ Return value should be a lua table which is akin to the following typescript typ
       type: "QueryGain",
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type: "QueryPitchBendRange",
+    });
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryLuaCode",
     });
     (window as object as NIHPlugWebviewWindow).sendToPlugin({
       type: "QueryNxoDefinition",
+    });
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type: "QueryTuningStatus",
     });
   }, [ipcReady]);
 
@@ -209,12 +235,44 @@ Return value should be a lua table which is akin to the following typescript typ
     []
   );
 
+  const onBendRangeChange = useMemo(
+    () =>
+      lodash.throttle(
+        (v: number) => {
+          (window as object as NIHPlugWebviewWindow).sendToPlugin({
+            type: "SetPitchBendRange",
+            cents: v,
+          });
+          setBendRangeCents(v);
+        },
+        100,
+        {
+          leading: true,
+          trailing: true,
+        }
+      ),
+    []
+  );
+
+  const loadTuningFile = async (
+    file: File | null,
+    type: "SetSclFile" | "SetKbmFile"
+  ) => {
+    if (!file) return;
+    const contents = await file.text();
+    (window as object as NIHPlugWebviewWindow).sendToPlugin({
+      type,
+      name: file.name,
+      contents,
+    });
+  };
+
   return (
     <Div
       width="100dvw"
       height="100dvh"
       display="grid"
-      gridTemplateRows="auto auto 1fr auto"
+      gridTemplateRows="auto auto auto 1fr auto"
       overflow="hidden"
     >
       <Div
@@ -342,6 +400,122 @@ Return value should be a lua table which is akin to the following typescript typ
           <Span>Compile</Span>
           <MdPlayArrow />
         </Button>
+      </Div>
+      <Div
+        width="100dvw"
+        padding="0.5rem"
+        background="#e6f5ff"
+        display="flex"
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="space-between"
+        gap="1rem"
+        flexWrap="wrap"
+      >
+        <Div display="flex" flexDirection="column" gap="0.25rem">
+          <P fontWeight="bold">Pitch Bend Range (cents)</P>
+          <Div display="flex" flexDirection="row" alignItems="center" gap="0.5rem">
+            {typeof bendRangeCents === "number" && (
+              <>
+                <Div width="160px">
+                  <Slider
+                    ariaLabelledby="bend-range-slider-label"
+                    className="horizontal-slider"
+                    thumbClassName="example-thumb"
+                    trackClassName="example-track"
+                    min={0}
+                    max={2400}
+                    value={bendRangeCents}
+                    onChange={onBendRangeChange}
+                  />
+                </Div>
+                <input
+                  type="number"
+                  min={0}
+                  max={2400}
+                  value={bendRangeCents}
+                  onChange={(event) =>
+                    onBendRangeChange(Number(event.target.value))
+                  }
+                  style={{ width: "80px" }}
+                />
+              </>
+            )}
+          </Div>
+        </Div>
+        <Div display="flex" flexDirection="column" gap="0.25rem">
+          <P fontWeight="bold">Scala Tuning Files</P>
+          <Div display="flex" flexDirection="row" alignItems="center" gap="0.5rem">
+            <label>
+              <Span>SCL:</Span>
+              <input
+                type="file"
+                accept=".scl"
+                onChange={(event) =>
+                  loadTuningFile(event.target.files?.[0] ?? null, "SetSclFile")
+                }
+              />
+            </label>
+            <Button
+              padding="0.25rem 0.5rem"
+              borderRadius="0.5rem"
+              border="1px solid #666"
+              cursor="pointer"
+              onClick={() =>
+                (window as object as NIHPlugWebviewWindow).sendToPlugin({
+                  type: "ClearSclFile",
+                })
+              }
+            >
+              Clear
+            </Button>
+            <Span>
+              {tuningStatus?.scl_name
+                ? `Loaded: ${tuningStatus.scl_name}`
+                : "No SCL loaded"}
+            </Span>
+          </Div>
+          <Div display="flex" flexDirection="row" alignItems="center" gap="0.5rem">
+            <label>
+              <Span>KBM:</Span>
+              <input
+                type="file"
+                accept=".kbm"
+                onChange={(event) =>
+                  loadTuningFile(event.target.files?.[0] ?? null, "SetKbmFile")
+                }
+              />
+            </label>
+            <Button
+              padding="0.25rem 0.5rem"
+              borderRadius="0.5rem"
+              border="1px solid #666"
+              cursor="pointer"
+              onClick={() =>
+                (window as object as NIHPlugWebviewWindow).sendToPlugin({
+                  type: "ClearKbmFile",
+                })
+              }
+            >
+              Clear
+            </Button>
+            <Span>
+              {tuningStatus?.kbm_name
+                ? `Loaded: ${tuningStatus.kbm_name}`
+                : "No KBM loaded"}
+            </Span>
+          </Div>
+          {tuningStatus?.error && (
+            <P color="red">{tuningStatus.error}</P>
+          )}
+          {tuningStatus && !tuningStatus.error && (
+            <P color={tuningStatus.active ? "green" : "black"}>
+              {tuningStatus.active
+                ? "Tuning active"
+                : "Using default equal temperament"}
+            </P>
+          )}
+        </Div>
       </Div>
       <Div display="grid" gridTemplateColumns="1fr 1fr">
         <Editor

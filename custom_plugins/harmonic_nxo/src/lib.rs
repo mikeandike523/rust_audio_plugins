@@ -17,6 +17,8 @@ use std::{
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
+use tuning::scala::{Kbm, Scl};
+use tuning::{KeyboardMapping, Scale, Tuning};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -152,11 +154,17 @@ impl TryFrom<RawNxoDefinition> for NxoDefinition {
 struct PluginParams {
     #[id = "gain"]
     pub gain: FloatParam,
+    #[id = "bend_range_cents"]
+    pub bend_range_cents: FloatParam,
     gain_value_changed: Arc<AtomicBool>,
     #[persist = "lua_code"]
     pub lua_code: Arc<Mutex<String>>,
     #[persist = "nxo_definition"]
     pub nxo_definition: Arc<Mutex<Option<String>>>,
+    #[persist = "scl_file"]
+    pub scl_file: Arc<Mutex<Option<TuningFile>>>,
+    #[persist = "kbm_file"]
+    pub kbm_file: Arc<Mutex<Option<TuningFile>>>,
 }
 
 impl Default for PluginParams {
@@ -181,11 +189,24 @@ impl Default for PluginParams {
             .with_step_size(0.01)
             .with_unit(" dB")
             .with_callback(param_callback.clone()),
+            bend_range_cents: FloatParam::new(
+                "Pitch Bend Range",
+                200.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 2400.0,
+                },
+            )
+            .with_smoother(SmoothingStyle::Linear(10.0))
+            .with_step_size(1.0)
+            .with_unit(" cents"),
             gain_value_changed,
             lua_code: Arc::new(Mutex::new(
                 include_str!("../web-gui/src/exampleLua/guitar.lua").to_string(),
             )),
             nxo_definition: Arc::new(Mutex::new(None)),
+            scl_file: Arc::new(Mutex::new(None)),
+            kbm_file: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -196,10 +217,15 @@ enum Action {
     Init,
     QueryCargoPackageVersion,
     QueryGain,
+    QueryPitchBendRange,
     QueryLuaCode,
     QueryNxoDefinition,
+    QueryTuningStatus,
     SetGainDB {
         gain: f32,
+    },
+    SetPitchBendRange {
+        cents: f32,
     },
     SetLuaCode {
         code: String,
@@ -207,11 +233,145 @@ enum Action {
     SetNxoDefinition {
         definition: HashMap<String, RawOscillatorParams>,
     },
+    SetSclFile {
+        name: String,
+        contents: String,
+    },
+    SetKbmFile {
+        name: String,
+        contents: String,
+    },
+    ClearSclFile,
+    ClearKbmFile,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct TuningFile {
+    name: String,
+    contents: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct TuningStatus {
+    active: bool,
+    scl_name: Option<String>,
+    kbm_name: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Clone)]
+struct TuningState {
+    tuning: Option<Arc<Tuning>>,
+    status: TuningStatus,
+}
+
+impl TuningState {
+    fn from_files(scl_file: Option<&TuningFile>, kbm_file: Option<&TuningFile>) -> Self {
+        let scl_name = scl_file.map(|file| file.name.clone());
+        let kbm_name = kbm_file.map(|file| file.name.clone());
+
+        if scl_file.is_none() && kbm_file.is_none() {
+            return Self {
+                tuning: None,
+                status: TuningStatus {
+                    active: false,
+                    scl_name,
+                    kbm_name,
+                    error: None,
+                },
+            };
+        }
+
+        let scl_text = scl_file
+            .map(|file| file.contents.as_str())
+            .unwrap_or(DEFAULT_SCL_TEXT);
+
+        let scl = match Scl::parse(scl_text) {
+            Ok(scl) => scl,
+            Err(err) => {
+                return Self {
+                    tuning: None,
+                    status: TuningStatus {
+                        active: false,
+                        scl_name,
+                        kbm_name,
+                        error: Some(format!("Failed to parse SCL: {err}")),
+                    },
+                };
+            }
+        };
+
+        let kbm = match kbm_file {
+            Some(file) => match Kbm::parse(&file.contents) {
+                Ok(kbm) => kbm,
+                Err(err) => {
+                    return Self {
+                        tuning: None,
+                        status: TuningStatus {
+                            active: false,
+                            scl_name,
+                            kbm_name,
+                            error: Some(format!("Failed to parse KBM: {err}")),
+                        },
+                    };
+                }
+            },
+            None => Kbm::default(),
+        };
+
+        let scale = Scale::from(scl);
+        let mapping = KeyboardMapping::from(kbm);
+        match Tuning::new(scale, mapping) {
+            Ok(tuning) => Self {
+                tuning: Some(Arc::new(tuning)),
+                status: TuningStatus {
+                    active: true,
+                    scl_name,
+                    kbm_name,
+                    error: None,
+                },
+            },
+            Err(err) => Self {
+                tuning: None,
+                status: TuningStatus {
+                    active: false,
+                    scl_name,
+                    kbm_name,
+                    error: Some(format!("Failed to build tuning: {err}")),
+                },
+            },
+        }
+    }
+
+    fn frequency_for_note(&self, note: f32) -> f32 {
+        self.tuning
+            .as_ref()
+            .map(|tuning| tuning.frequency(note))
+            .unwrap_or_else(|| util::f32_midi_note_to_freq(note))
+    }
+}
+
+const DEFAULT_SCL_TEXT: &str = r#"
+! 12-ET
+12 tone equal temperament
+12
+!
+100.0
+200.0
+300.0
+400.0
+500.0
+600.0
+700.0
+800.0
+900.0
+1000.0
+1100.0
+1200.0
+"#;
 
 struct Voice {
     note_id: u8,
-    freq: f32,
     phase: f32,
     sample_rate: f32,
     start_ts: u64,
@@ -223,7 +383,6 @@ impl Voice {
     pub fn new(sr: f32) -> Self {
         Self {
             note_id: 0,
-            freq: 0.0,
             phase: 0.0,
             sample_rate: sr,
             start_ts: 0,
@@ -234,7 +393,6 @@ impl Voice {
 
     pub fn trigger(&mut self, note: u8, velocity: f32, timestamp: u64) {
         self.note_id = note;
-        self.freq = util::midi_note_to_freq(note);
         self.start_ts = timestamp;
         self.release_ts = None;
         self.velocity_gain = velocity_to_gain(velocity);
@@ -246,7 +404,14 @@ impl Voice {
         }
     }
 
-    pub fn next_sample(&mut self, now_ts: u64, nxo: &NxoDefinition, pitch_bend: f32, pitch_bend_range: f32) -> f32 {
+    pub fn next_sample(
+        &mut self,
+        now_ts: u64,
+        nxo: &NxoDefinition,
+        tuning: &TuningState,
+        pitch_bend: f32,
+        pitch_bend_range_cents: f32,
+    ) -> f32 {
         let t = (now_ts - self.start_ts) as f32 / self.sample_rate;
         let note_off = self
             .release_ts
@@ -264,10 +429,11 @@ impl Voice {
             val += (self.phase * mul.0 * std::f32::consts::TAU).sin() * amp;
         }
 
-        // Apply pitch bend: convert normalized pitch bend to semitone offset and factor.
-        let semitone_offset = (pitch_bend - 0.5) * 2.0 * pitch_bend_range;
-        let bend_factor = 2.0f32.powf(semitone_offset / 12.0);
-        let delta = self.freq * bend_factor / self.sample_rate;
+        let bend_semitones =
+            util::midi_pitch_bend_to_semitones(pitch_bend, pitch_bend_range_cents / 100.0);
+        let note_with_bend = self.note_id as f32 + bend_semitones;
+        let freq = tuning.frequency_for_note(note_with_bend);
+        let delta = freq / self.sample_rate;
         self.phase = (self.phase + delta) % 1.0;
         val
     }
@@ -313,11 +479,10 @@ pub struct HarmonicNxo {
     active_voices: HashMap<u8, usize>,
     queue: VecDeque<usize>,
     nxo_definition: Arc<Mutex<NxoDefinition>>,
+    tuning_state: Arc<Mutex<TuningState>>,
     ts: u64,
     /// Current normalized pitch bend value (0.5 = no bend).
     pitch_bend: f32,
-    /// Pitch bend range in semitones.
-    pitch_bend_range: f32,
     midi_states: Arc<Vec<AtomicBool>>,
     last_midi_send: Arc<Mutex<Instant>>,
     remote_logger: RemoteLogger,
@@ -342,6 +507,11 @@ impl Default for HarmonicNxo {
                 NxoDefinition::try_from(def).unwrap_or_default()
             }
         };
+        let initial_tuning = {
+            let scl_file = params.scl_file.lock().unwrap().clone();
+            let kbm_file = params.kbm_file.lock().unwrap().clone();
+            TuningState::from_files(scl_file.as_ref(), kbm_file.as_ref())
+        };
         Self {
             params,
             sample_rate: 44100.0,
@@ -349,12 +519,12 @@ impl Default for HarmonicNxo {
             active_voices: HashMap::new(),
             queue: VecDeque::new(),
             nxo_definition: Arc::new(Mutex::new(initial_nxo)),
+            tuning_state: Arc::new(Mutex::new(initial_tuning)),
             ts: 0,
             midi_states: Arc::new((0..128).map(|_| AtomicBool::new(false)).collect()),
             last_midi_send: Arc::new(Mutex::new(Instant::now())),
             remote_logger: RemoteLogger::new(9099),
             pitch_bend: 0.5,
-            pitch_bend_range: 2.0,
         }
     }
 }
@@ -406,6 +576,9 @@ impl Plugin for HarmonicNxo {
                 }
             }
         }
+        let scl_file = self.params.scl_file.lock().unwrap().clone();
+        let kbm_file = self.params.kbm_file.lock().unwrap().clone();
+        *self.tuning_state.lock().unwrap() = TuningState::from_files(scl_file.as_ref(), kbm_file.as_ref());
         true
     }
 
@@ -426,6 +599,7 @@ impl Plugin for HarmonicNxo {
             events.push(evt);
         }
         let nxo = { self.nxo_definition.lock().unwrap().clone() };
+        let tuning_state = { self.tuning_state.lock().unwrap().clone() };
         for (sample_id, mut channels) in buffer.iter_samples().enumerate() {
             self.ts = self.ts.wrapping_add(1);
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -495,7 +669,14 @@ impl Plugin for HarmonicNxo {
             }
             let mut out_sample = 0.0;
             for v in &mut self.voices {
-                let voice_sample = v.next_sample(self.ts, &nxo, self.pitch_bend, self.pitch_bend_range);
+                let bend_range_cents = self.params.bend_range_cents.smoothed.next();
+                let voice_sample = v.next_sample(
+                    self.ts,
+                    &nxo,
+                    &tuning_state,
+                    self.pitch_bend,
+                    bend_range_cents,
+                );
                 if voice_sample != 0.0 {
                     let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
                     out_sample += voice_sample * gain;
@@ -513,6 +694,7 @@ impl Plugin for HarmonicNxo {
         let midi_states = self.midi_states.clone();
         let last_midi_send = self.last_midi_send.clone();
         let nxo_def = self.nxo_definition.clone();
+        let tuning_state = self.tuning_state.clone();
         let logger = self.remote_logger.clone();
         let url = {
             // Try to connect to local dev server with a 500ms timeout
@@ -556,6 +738,11 @@ impl Plugin for HarmonicNxo {
                                 setter.set_parameter(&params.gain, gain);
                                 setter.end_set_parameter(&params.gain);
                             }
+                            Action::SetPitchBendRange { cents } => {
+                                setter.begin_set_parameter(&params.bend_range_cents);
+                                setter.set_parameter(&params.bend_range_cents, cents);
+                                setter.end_set_parameter(&params.bend_range_cents);
+                            }
 
                             Action::SetLuaCode { code } => {
                                 *params.lua_code.lock().unwrap() = code;
@@ -572,6 +759,66 @@ impl Plugin for HarmonicNxo {
                                     }));
                                 }
                             }
+                            Action::SetSclFile { name, contents } => {
+                                *params.scl_file.lock().unwrap() = Some(TuningFile { name, contents });
+                                let scl_file = params.scl_file.lock().unwrap().clone();
+                                let kbm_file = params.kbm_file.lock().unwrap().clone();
+                                let new_state = TuningState::from_files(
+                                    scl_file.as_ref(),
+                                    kbm_file.as_ref(),
+                                );
+                                let status = new_state.status.clone();
+                                *tuning_state.lock().unwrap() = new_state;
+                                ctx.send_json(json!({
+                                    "type": "RespondTuningStatus",
+                                    "status": status
+                                }));
+                            }
+                            Action::SetKbmFile { name, contents } => {
+                                *params.kbm_file.lock().unwrap() = Some(TuningFile { name, contents });
+                                let scl_file = params.scl_file.lock().unwrap().clone();
+                                let kbm_file = params.kbm_file.lock().unwrap().clone();
+                                let new_state = TuningState::from_files(
+                                    scl_file.as_ref(),
+                                    kbm_file.as_ref(),
+                                );
+                                let status = new_state.status.clone();
+                                *tuning_state.lock().unwrap() = new_state;
+                                ctx.send_json(json!({
+                                    "type": "RespondTuningStatus",
+                                    "status": status
+                                }));
+                            }
+                            Action::ClearSclFile => {
+                                *params.scl_file.lock().unwrap() = None;
+                                let scl_file = params.scl_file.lock().unwrap().clone();
+                                let kbm_file = params.kbm_file.lock().unwrap().clone();
+                                let new_state = TuningState::from_files(
+                                    scl_file.as_ref(),
+                                    kbm_file.as_ref(),
+                                );
+                                let status = new_state.status.clone();
+                                *tuning_state.lock().unwrap() = new_state;
+                                ctx.send_json(json!({
+                                    "type": "RespondTuningStatus",
+                                    "status": status
+                                }));
+                            }
+                            Action::ClearKbmFile => {
+                                *params.kbm_file.lock().unwrap() = None;
+                                let scl_file = params.scl_file.lock().unwrap().clone();
+                                let kbm_file = params.kbm_file.lock().unwrap().clone();
+                                let new_state = TuningState::from_files(
+                                    scl_file.as_ref(),
+                                    kbm_file.as_ref(),
+                                );
+                                let status = new_state.status.clone();
+                                *tuning_state.lock().unwrap() = new_state;
+                                ctx.send_json(json!({
+                                    "type": "RespondTuningStatus",
+                                    "status": status
+                                }));
+                            }
 
                             Action::Init => {
                                 // no-op
@@ -586,6 +833,12 @@ impl Plugin for HarmonicNxo {
                                 ctx.send_json(json!({
                                     "type": "RespondGain",
                                     "gain": params.gain.value()
+                                }));
+                            }
+                            Action::QueryPitchBendRange => {
+                                ctx.send_json(json!({
+                                    "type": "RespondPitchBendRange",
+                                    "cents": params.bend_range_cents.value()
                                 }));
                             }
                             Action::QueryLuaCode => {
@@ -609,6 +862,13 @@ impl Plugin for HarmonicNxo {
                                         }));
                                     }
                                 }
+                            }
+                            Action::QueryTuningStatus => {
+                                let status = tuning_state.lock().unwrap().status.clone();
+                                ctx.send_json(json!({
+                                    "type": "RespondTuningStatus",
+                                    "status": status
+                                }));
                             }
                         }
                     } else {
