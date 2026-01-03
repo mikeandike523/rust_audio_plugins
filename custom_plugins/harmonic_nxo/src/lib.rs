@@ -1,11 +1,12 @@
 mod ADSR;
 mod remote_logging;
 use ADSR::{EnvelopeParams, is_finished, value_at};
-#[cfg(feature = "webview")]
+// #[cfg(feature = "webview")]
 use nih_plug_webview::*;
 use remote_logging::RemoteLogger;
 
 use nih_plug::prelude::*;
+use ureq::json;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
@@ -691,7 +692,7 @@ impl Plugin for HarmonicNxo {
         ProcessStatus::KeepAlive
     }
 
-    #[cfg(feature = "webview")]
+    // #[cfg(feature = "webview")]
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
         let midi_states = self.midi_states.clone();
