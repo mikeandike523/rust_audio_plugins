@@ -17,8 +17,8 @@ use std::{
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
-use tuning::scala::{Kbm, Scl};
-use tuning::{KeyboardMapping, Scale, Tuning};
+use tune::scala::{Kbm, Scl};
+use tune::{KeyboardMapping, Scale, Tuning};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
