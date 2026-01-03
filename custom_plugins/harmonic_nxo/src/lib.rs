@@ -898,10 +898,7 @@ impl Plugin for HarmonicNxo {
         Some(Box::new(editor))
     }
 
-    #[cfg(not(feature = "webview"))]
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        None
-    }
+
 }
 
 impl HarmonicNxo {
