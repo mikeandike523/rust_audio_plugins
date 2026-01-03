@@ -8,9 +8,6 @@
     "bundle-harmonic-nxo-release": "bash scripts/bundle-harmonic-nxo-release.sh",
     "publish-harmonic-nxo-gui":"bash scripts/publish-harmonic-nxo-gui.sh",
     "bundle-mixmean-release": "bash scripts/bundle-mixmean-release.sh",
-    "start-progfilt-gui-dev": "bash scripts/start-progfilt-gui-dev.sh",
-    "bundle-progfilt-release": "bash scripts/bundle-progfilt-release.sh",
-    "publish-progfilt-gui":"bash scripts/publish-progfilt-gui.sh",
     "start-log-server": "node scripts/log-server.js"
   },
   "keywords": [],
