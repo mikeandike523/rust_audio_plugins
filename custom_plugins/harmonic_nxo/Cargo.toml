@@ -13,4 +13,4 @@ serde_json = "1.0"
 nih_plug_webview = { path = "../../nih-plug-webview" }
 ordered-float = "2"
 ureq = { version = "2", features = ["json"]}
-tuning = "0.8.0"
+tuning = "0.5.3"
