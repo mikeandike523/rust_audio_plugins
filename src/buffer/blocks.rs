@@ -1,3 +1,4 @@
+#![allow(dangerous_implicit_autorefs)]
 //! Per-block per-channel per-sample iterators.
 
 use std::marker::PhantomData;

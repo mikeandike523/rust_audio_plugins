@@ -1,6 +1,7 @@
 mod ADSR;
 mod remote_logging;
 use ADSR::{EnvelopeParams, is_finished, value_at};
+#[cfg(feature = "webview")]
 use nih_plug_webview::*;
 use remote_logging::RemoteLogger;
 
@@ -16,9 +17,10 @@ use std::{
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, json};
+use serde_json::{self};
 use tune::scala::{Kbm, Scl};
-use tune::{KeyboardMapping, Scale, Tuning};
+use tune::tuning::KeyboardMapping;
+use tune::key::PianoKey;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -261,7 +263,8 @@ struct TuningStatus {
 
 #[derive(Clone)]
 struct TuningState {
-    tuning: Option<Arc<Tuning>>,
+    scl: Option<Scl>,
+    kbm: Option<Kbm>,
     status: TuningStatus,
 }
 
@@ -270,84 +273,83 @@ impl TuningState {
         let scl_name = scl_file.map(|file| file.name.clone());
         let kbm_name = kbm_file.map(|file| file.name.clone());
 
+        // No tuning selected
         if scl_file.is_none() && kbm_file.is_none() {
             return Self {
-                tuning: None,
-                status: TuningStatus {
-                    active: false,
-                    scl_name,
-                    kbm_name,
-                    error: None,
-                },
+                scl: None,
+                kbm: None,
+                status: TuningStatus { active: false, scl_name, kbm_name, error: None },
             };
         }
 
-        let scl_text = scl_file
-            .map(|file| file.contents.as_str())
-            .unwrap_or(DEFAULT_SCL_TEXT);
-
-        let scl = match Scl::parse(scl_text) {
-            Ok(scl) => scl,
-            Err(err) => {
+        // Load SCL
+        let scl_text = scl_file.map(|f| f.contents.as_str()).unwrap_or(DEFAULT_SCL_TEXT);
+        let scl = match Scl::import(scl_text.as_bytes()) {
+            Ok(s) => s,
+            Err(e) => {
                 return Self {
-                    tuning: None,
+                    scl: None,
+                    kbm: None,
                     status: TuningStatus {
                         active: false,
                         scl_name,
                         kbm_name,
-                        error: Some(format!("Failed to parse SCL: {err}")),
+                        error: Some(format!("Failed to import SCL: {:?}", e)),
                     },
                 };
             }
         };
 
-        let kbm = match kbm_file {
-            Some(file) => match Kbm::parse(&file.contents) {
-                Ok(kbm) => kbm,
-                Err(err) => {
+        // Load KBM if provided
+        let kbm = if let Some(file) = kbm_file {
+            match Kbm::import(file.contents.as_bytes()) {
+                Ok(m) => Some(m),
+                Err(e) => {
                     return Self {
-                        tuning: None,
+                        scl: None,
+                        kbm: None,
                         status: TuningStatus {
                             active: false,
                             scl_name,
                             kbm_name,
-                            error: Some(format!("Failed to parse KBM: {err}")),
+                            error: Some(format!("Failed to import KBM: {:?}", e)),
                         },
                     };
                 }
-            },
-            None => Kbm::default(),
+            }
+        } else {
+            None
         };
 
-        let scale = Scale::from(scl);
-        let mapping = KeyboardMapping::from(kbm);
-        match Tuning::new(scale, mapping) {
-            Ok(tuning) => Self {
-                tuning: Some(Arc::new(tuning)),
-                status: TuningStatus {
-                    active: true,
-                    scl_name,
-                    kbm_name,
-                    error: None,
-                },
-            },
-            Err(err) => Self {
-                tuning: None,
-                status: TuningStatus {
-                    active: false,
-                    scl_name,
-                    kbm_name,
-                    error: Some(format!("Failed to build tuning: {err}")),
-                },
-            },
+        Self {
+            scl: Some(scl),
+            kbm,
+            status: TuningStatus { active: true, scl_name, kbm_name, error: None },
         }
     }
 
     fn frequency_for_note(&self, note: f32) -> f32 {
-        self.tuning
-            .as_ref()
-            .map(|tuning| tuning.frequency(note))
-            .unwrap_or_else(|| util::f32_midi_note_to_freq(note))
+        let floor_n = note.floor() as i32;
+        let frac = note - floor_n as f32;
+        let f0 = self.freq_for_degree(floor_n);
+        let f1 = self.freq_for_degree(floor_n + 1);
+        f0 * (1.0 - frac) + f1 * frac
+    }
+
+    // Frequency for an integer MIDI degree, taking SCL and optional KBM into account
+    fn freq_for_degree(&self, degree: i32) -> f32 {
+        if let Some(scl) = &self.scl {
+            if let Some(kbm) = &self.kbm {
+                let key = PianoKey::from_midi_number(degree);
+                if let Some(pitch) = (scl, kbm).maybe_pitch_of(key) {
+                    return pitch.as_hz() as f32;
+                }
+            }
+            // Pure SCL mapping relative to equal temperament baseline
+            let ratio = scl.relative_pitch_of(degree);
+            return util::f32_midi_note_to_freq(degree as f32) * ratio.as_float() as f32;
+        }
+        util::f32_midi_note_to_freq(degree as f32)
     }
 }
 
@@ -689,6 +691,7 @@ impl Plugin for HarmonicNxo {
         ProcessStatus::KeepAlive
     }
 
+    #[cfg(feature = "webview")]
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
         let midi_states = self.midi_states.clone();
@@ -892,6 +895,11 @@ impl Plugin for HarmonicNxo {
                 }
             });
         Some(Box::new(editor))
+    }
+
+    #[cfg(not(feature = "webview"))]
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        None
     }
 }
 
