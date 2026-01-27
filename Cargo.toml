@@ -21,7 +21,9 @@ members = [
   "anymap-1.0.0-beta.2",
 
   "custom_plugins/harmonic_nxo",
+  "custom_plugins/dispatch",
   "custom_plugins/mixmean",
+  "custom_plugins/basic-plugin-example",
 
 ]
 

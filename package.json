@@ -4,6 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start-basic-plugin-example-gui-dev": "bash scripts/start-basic-plugin-example-gui-dev.sh",
+    "bundle-basic-plugin-example-dev": "bash scripts/bundle-basic-plugin-example-dev.sh",
+    "bundle-basic-plugin-example-release": "bash scripts/bundle-basic-plugin-example-release.sh",
+    "start-dispatch-gui-dev": "bash scripts/start-dispatch-gui-dev.sh",
+    "bundle-dispatch-dev": "bash scripts/bundle-dispatch-dev.sh",
+    "bundle-dispatch-release": "bash scripts/bundle-dispatch-release.sh",
     "start-harmonic-nxo-gui-dev": "bash scripts/start-harmonic-nxo-gui-dev.sh",
     "bundle-harmonic-nxo-release": "bash scripts/bundle-harmonic-nxo-release.sh",
     "publish-harmonic-nxo-gui":"bash scripts/publish-harmonic-nxo-gui.sh",

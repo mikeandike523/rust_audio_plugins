@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dispatch</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f3ef;
+        --panel: #ffffff;
+        --text: #1d1d1b;
+        --accent: #2f5d50;
+        --muted: #a5a099;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: "Trebuchet MS", "Lucida Sans", Arial, sans-serif;
+        background: radial-gradient(circle at top, #faf6f2 0%, var(--bg) 55%, #ece6df 100%);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .panel {
+        width: min(360px, 100%);
+        background: var(--panel);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(30, 30, 30, 0.15);
+        border: 1px solid #ded8d1;
+      }
+
+      h1 {
+        font-size: 20px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+
+      p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 20px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .value {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--accent);
+        min-width: 72px;
+        text-align: right;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .footer {
+        margin-top: 16px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>Dispatch</h1>
+      <p>Minimal gain control over a webview GUI.</p>
+      <div class="row">
+        <input id="gain" type="range" min="-24" max="24" step="0.1" value="0" />
+        <div class="value" id="gain-value">0.0 dB</div>
+      </div>
+      <div class="footer" id="status">Waiting for plugin...</div>
+    </div>
+
+    <script>
+      const gainSlider = document.getElementById("gain");
+      const gainValue = document.getElementById("gain-value");
+      const status = document.getElementById("status");
+
+      const sendToPluginSafe = (payload) => {
+        if (typeof window.sendToPlugin === "function") {
+          window.sendToPlugin(payload);
+        } else {
+          console.log("sendToPlugin missing", payload);
+        }
+      };
+
+      const setGainDisplay = (value) => {
+        const clamped = Math.max(-24, Math.min(24, value));
+        gainSlider.value = clamped.toFixed(1);
+        gainValue.textContent = `${clamped.toFixed(1)} dB`;
+      };
+
+      gainSlider.addEventListener("input", () => {
+        const value = Number(gainSlider.value);
+        setGainDisplay(value);
+        sendToPluginSafe({ type: "SetGain", value });
+      });
+
+      window.onPluginMessage = (msg) => {
+        if (msg.type === "ParamChange") {
+          setGainDisplay(msg.value);
+          status.textContent = "Connected";
+        }
+      };
+
+      sendToPluginSafe({ type: "Init" });
+    </script>
+  </body>
+</html>
