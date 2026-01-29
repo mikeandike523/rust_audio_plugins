@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 const GUI_WIDTH: u32 = 520;
 const GUI_HEIGHT: u32 = 300;
-const GUI_HTML: &str = include_str!("../web-gui/embedded.html");
 const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
+const GUI_DEV_SERVER_ROUTE: &str = "/wth-plugin-name";
+const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-plugin-name";
+const GUI_PUBLISHED_URL: &str = "https://wth-plugins-basic-plugin-example.vercel.app";
 const METER_UPDATE_SECONDS: f32 = 0.1;
 
 #[derive(Params)]
@@ -144,6 +146,46 @@ impl BasicPluginExample {
         self.meter_dirty.store(true, Ordering::Relaxed);
         self.reset_meter_peaks();
     }
+
+    fn resolve_gui_url() -> &'static str {
+        match std::thread::spawn(move || {
+            use std::time::Duration;
+            let client = std::sync::Arc::new(
+                ureq::AgentBuilder::new()
+                    .timeout_connect(Duration::from_millis(500))
+                    .timeout_read(Duration::from_millis(500))
+                    .build(),
+            );
+
+            client.get(GUI_DEV_SERVER_PROBE_URL).call()
+        })
+        .join()
+        {
+            Ok(Ok(response)) => {
+                let content_type = response.header("Content-Type").unwrap_or("");
+                if content_type.starts_with("text/") {
+                    println!(
+                        "Local dev server detected at {}{}",
+                        GUI_DEV_SERVER_URL, GUI_DEV_SERVER_ROUTE
+                    );
+                    GUI_DEV_SERVER_PROBE_URL
+                } else {
+                    println!(
+                        "Local dev server response was not text ({}), using production URL: {}",
+                        content_type, GUI_PUBLISHED_URL
+                    );
+                    GUI_PUBLISHED_URL
+                }
+            }
+            _ => {
+                println!(
+                    "Local dev server not available, using production URL: {}",
+                    GUI_PUBLISHED_URL
+                );
+                GUI_PUBLISHED_URL
+            }
+        }
+    }
 }
 
 impl Plugin for BasicPluginExample {
@@ -238,12 +280,7 @@ impl Plugin for BasicPluginExample {
         let meter_output_r = self.meter_output_r.clone();
         let meter_dirty = self.meter_dirty.clone();
 
-        let source = if std::env::var("BASIC_PLUGIN_EXAMPLE_GUI_DEV_SERVER").as_deref() == Ok("1")
-        {
-            HTMLSource::URL(GUI_DEV_SERVER_URL)
-        } else {
-            HTMLSource::String(GUI_HTML)
-        };
+        let source = HTMLSource::URL(Self::resolve_gui_url());
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)

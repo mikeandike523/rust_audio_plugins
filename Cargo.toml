@@ -22,7 +22,7 @@ members = [
 
   "custom_plugins/harmonic_nxo",
   "custom_plugins/mixmean",
-  "custom_plugins/basic-plugin-example",
+  "custom_plugins/basic_plugin_example",
 
 ]
 

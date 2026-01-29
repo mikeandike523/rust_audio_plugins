@@ -1,3 +1,3 @@
 #!/bin/bash
 
-cargo xtask bundle basic-plugin-example
+cargo xtask bundle basic_plugin_example

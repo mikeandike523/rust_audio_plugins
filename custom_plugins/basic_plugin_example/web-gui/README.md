@@ -11,7 +11,12 @@ pnpm --dir basic_plugin_example/web-gui install
 pnpm --dir basic_plugin_example/web-gui dev
 ```
 
-To point the plugin at the dev server, set `BASIC_PLUGIN_EXAMPLE_GUI_DEV_SERVER=1` before launching the host.
+The plugin will probe `http://localhost:5173/wth-plugin-name`. If it receives a
+text response, it loads the UI from that URL. Otherwise it falls back to the
+published build at `https://wth-plugins-basic-plugin-example.vercel.app`.
+
+Configure the Vite dev server to rewrite `/wth-plugin-name` to
+`/basic_plugin_example` so the plugin only connects to the intended app.
 
 ## Publish embedded HTML
 
