@@ -1,6 +1,10 @@
 node_modules
 target
 
+.venv
+
+**/__pycache__
+
 # For agents to download repos and code just to read it
 repos_to_explore
 
