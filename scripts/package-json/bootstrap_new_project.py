@@ -32,6 +32,87 @@ def copy_template(source_dir: Path, dest_dir: Path) -> None:
     shutil.copytree(source_dir, dest_dir, ignore=ignore)
 
 
+def read_text_with_eol(path: Path) -> tuple[str, str]:
+    data = path.read_bytes()
+    text = data.decode("utf-8")
+
+    crlf = data.count(b"\r\n")
+    lf = data.count(b"\n") - crlf
+    cr = data.count(b"\r") - crlf
+
+    if crlf >= lf and crlf >= cr and crlf > 0:
+        newline = "\r\n"
+    elif cr > 0 and cr >= lf:
+        newline = "\r"
+    else:
+        newline = "\n"
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized, newline
+
+
+def write_text_with_eol(path: Path, text: str, newline: str) -> None:
+    payload = text if newline == "\n" else text.replace("\n", newline)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(payload)
+
+
+def to_pascal_case(name: str) -> str:
+    return "".join(part.capitalize() for part in name.split("_") if part)
+
+
+def make_vst3_class_id(template: str, new_name: str) -> str:
+    if "_" in template:
+        prefix = template.split("_", 1)[0] + "_"
+    else:
+        prefix = ""
+
+    max_len = 16
+    remaining = max_len - len(prefix)
+    base = re.sub(r"[^A-Za-z0-9]", "", to_pascal_case(new_name))
+
+    if remaining <= 0:
+        return prefix[:max_len].ljust(max_len, "_")
+
+    trimmed = base[:remaining]
+    return prefix + trimmed.ljust(remaining, "_")
+
+
+def make_clap_id(template: str, new_name: str) -> str:
+    if "." in template:
+        prefix = template.rsplit(".", 1)[0] + "."
+        return prefix + new_name
+    return new_name
+
+
+def update_plugin_ids(lib_rs: Path, new_name: str) -> None:
+    text, newline = read_text_with_eol(lib_rs)
+
+    def replace_clap(match: re.Match[str]) -> str:
+        updated = make_clap_id(match.group(2), new_name)
+        return f"{match.group(1)}{updated}{match.group(3)}"
+
+    def replace_vst(match: re.Match[str]) -> str:
+        updated = make_vst3_class_id(match.group(2), new_name)
+        return f"{match.group(1)}{updated}{match.group(3)}"
+
+    updated = re.sub(
+        r'(?m)^(\s*const\s+CLAP_ID\s*:\s*&\'static str\s*=\s*")(.*?)(";)',
+        replace_clap,
+        text,
+        count=1,
+    )
+    updated = re.sub(
+        r'(?m)^(\s*const\s+VST3_CLASS_ID\s*:\s*\[u8;\s*16\]\s*=\s*\*b")(.*?)(";)',
+        replace_vst,
+        updated,
+        count=1,
+    )
+
+    if updated != text:
+        write_text_with_eol(lib_rs, updated, newline)
+
+
 def update_text_files(dest_dir: Path, new_name: str) -> None:
     new_kebab = new_name.replace("_", "-")
     new_title = " ".join(part.capitalize() for part in new_name.split("_"))
@@ -40,7 +121,7 @@ def update_text_files(dest_dir: Path, new_name: str) -> None:
         if not path.is_file():
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text, newline = read_text_with_eol(path)
         except UnicodeDecodeError:
             continue
 
@@ -49,18 +130,18 @@ def update_text_files(dest_dir: Path, new_name: str) -> None:
         updated = updated.replace("Basic Plugin Example", new_title)
 
         if updated != text:
-            path.write_text(updated, encoding="utf-8")
+            write_text_with_eol(path, updated, newline)
 
 
 def update_cargo_toml(cargo_toml: Path, new_name: str) -> None:
-    text = cargo_toml.read_text(encoding="utf-8")
+    text, newline = read_text_with_eol(cargo_toml)
     text = re.sub(r'(?m)^name\s*=\s*".*?"', f'name = "{new_name}"', text, count=1)
     text = re.sub(r'(?m)^version\s*=\s*".*?"', 'version = "0.0.0"', text, count=1)
-    cargo_toml.write_text(text, encoding="utf-8")
+    write_text_with_eol(cargo_toml, text, newline)
 
 
 def update_web_package_json(package_json: Path, new_name: str) -> None:
-    text = package_json.read_text(encoding="utf-8")
+    text, newline = read_text_with_eol(package_json)
     text = re.sub(
         r'(?m)^(\s*"name"\s*:\s*)".*?"',
         rf'\1"{new_name}-web-gui"',
@@ -73,11 +154,11 @@ def update_web_package_json(package_json: Path, new_name: str) -> None:
         text,
         count=1,
     )
-    package_json.write_text(text, encoding="utf-8")
+    write_text_with_eol(package_json, text, newline)
 
 
 def add_workspace_member(root_cargo: Path, new_name: str) -> None:
-    text = root_cargo.read_text(encoding="utf-8")
+    text, newline = read_text_with_eol(root_cargo)
     member_entry = f'"custom_plugins/{new_name}"'
 
     if member_entry in text:
@@ -101,7 +182,7 @@ def add_workspace_member(root_cargo: Path, new_name: str) -> None:
     new_block = "\n".join(lines + trailing)
 
     updated = text[: match.start(2)] + new_block + text[match.end(2) :]
-    root_cargo.write_text(updated, encoding="utf-8")
+    write_text_with_eol(root_cargo, updated, newline)
 
 
 def main() -> int:
@@ -130,6 +211,7 @@ def main() -> int:
 
     copy_template(source_dir, dest_dir)
     update_text_files(dest_dir, args.name)
+    update_plugin_ids(dest_dir / "src" / "lib.rs", args.name)
     update_cargo_toml(dest_dir / "Cargo.toml", args.name)
     update_web_package_json(dest_dir / "web-gui" / "package.json", args.name)
     add_workspace_member(repo_root / "Cargo.toml", args.name)
