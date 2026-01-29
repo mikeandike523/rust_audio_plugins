@@ -34,6 +34,7 @@ def copy_template(source_dir: Path, dest_dir: Path) -> None:
 
 def update_text_files(dest_dir: Path, new_name: str) -> None:
     new_kebab = new_name.replace("_", "-")
+    new_title = " ".join(part.capitalize() for part in new_name.split("_"))
 
     for path in dest_dir.rglob("*"):
         if not path.is_file():
@@ -45,6 +46,7 @@ def update_text_files(dest_dir: Path, new_name: str) -> None:
 
         updated = text.replace("basic_plugin_example", new_name)
         updated = updated.replace("basic-plugin-example", new_kebab)
+        updated = updated.replace("Basic Plugin Example", new_title)
 
         if updated != text:
             path.write_text(updated, encoding="utf-8")
