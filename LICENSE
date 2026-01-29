@@ -1,3 +1,16 @@
+Original code is copyright 2026 by Michael Sohnen
+
+
+Original code is bound by:
+<< Todo: Insert MIT LICENSE>>
+
+However, this repository makes use of a library, NIH-plug, that has a license that
+demands acknowledgement of their copyright
+
+Users of this library are bound therefore, by my license, as well as the licenses of any external libraries used in this repository
+
+Due to this project structure being an extension of the NIH-Plug repository, I have included the original NIH-Plug license below:
+
 ISC License
 
 Copyright (c) 2022-2024 Robbert van der Helm

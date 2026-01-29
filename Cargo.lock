@@ -272,6 +272,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "basic-plugin-example"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_webview",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
