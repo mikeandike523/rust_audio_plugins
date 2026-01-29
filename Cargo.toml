@@ -23,7 +23,7 @@ members = [
   "custom_plugins/harmonic_nxo",
   "custom_plugins/mixmean",
   "custom_plugins/basic_plugin_example",
-
+  "custom_plugins/sine_fold",
 ]
 
 [features]
