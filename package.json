@@ -8,6 +8,7 @@
     "basic_plugin_example:gui:start-dev":"bash scripts/package-json/basic_plugin_example/gui/start-dev.sh",
     "basic_plugin_example:rust:bundle-dev":"bash scripts/package-json/basic_plugin_example/rust/bundle-dev.sh",
     "basic_plugin_example:rust:bundle-release":"bash scripts/package-json/basic_plugin_example/rust/bundle-release.sh",
+    "basic_plugin_example:gui:publish":"bash scripts/package-json/basic_plugin_example/gui/publish.sh",
 
     "mixmean:gui:start-dev":"bash scripts/package-json/mixmean/gui/start-dev.sh",
     "mixmean:rust:bundle-dev":"bash scripts/package-json/mixmean/rust/bundle-dev.sh",
@@ -16,6 +17,7 @@
     "harmonic_nxo:gui:start-dev":"bash scripts/package-json/harmonic_nxo/gui/start-dev.sh",
     "harmonic_nxo:rust:bundle-dev":"bash scripts/package-json/harmonic_nxo/rust/bundle-dev.sh",
     "harmonic_nxo:rust:bundle-release":"bash scripts/package-json/harmonic_nxo/rust/bundle-release.sh",
+    "harmonic_nxo:gui:publish":"bash scripts/package-json/harmonic_nxo/gui/publish.sh",
 
 
     "start-log-server": "node scripts/log-server.js"
