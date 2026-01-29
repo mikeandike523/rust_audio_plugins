@@ -20,6 +20,7 @@
     "harmonic_nxo:gui:publish":"bash scripts/package-json/harmonic_nxo/gui/publish.sh",
 
 
+    "bootstrap-new-project": "bash __inenv python scripts/package-json/bootstrap_new_project.py",
     "start-log-server": "node scripts/log-server.js"
   },
   "keywords": [],
