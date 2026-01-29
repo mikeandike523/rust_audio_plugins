@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     
-    "basic-plugin-example:gui:start-dev":"bash scripts/package-json/basic-plugin-example/gui/start-dev.sh",
-    "basic-plugin-example:rust:bundle-dev":"bash scripts/package-json/basic-plugin-example/rust/bundle-dev.sh",
-    "basic-plugin-example:rust:bundle-release":"bash scripts/package-json/basic-plugin-example/rust/bundle-release.sh",
+    "basic_plugin_example:gui:start-dev":"bash scripts/package-json/basic_plugin_example/gui/start-dev.sh",
+    "basic_plugin_example:rust:bundle-dev":"bash scripts/package-json/basic_plugin_example/rust/bundle-dev.sh",
+    "basic_plugin_example:rust:bundle-release":"bash scripts/package-json/basic_plugin_example/rust/bundle-release.sh",
 
     "mixmean:gui:start-dev":"bash scripts/package-json/mixmean/gui/start-dev.sh",
     "mixmean:rust:bundle-dev":"bash scripts/package-json/mixmean/rust/bundle-dev.sh",
