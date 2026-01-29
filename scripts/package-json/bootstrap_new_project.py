@@ -28,7 +28,9 @@ def validate_name(name: str) -> None:
 
 
 def copy_template(source_dir: Path, dest_dir: Path) -> None:
-    ignore = shutil.ignore_patterns("node_modules", "dist", "target", ".DS_Store")
+    ignore = shutil.ignore_patterns(
+        "node_modules", "dist", "target", ".DS_Store", ".vercel"
+    )
     shutil.copytree(source_dir, dest_dir, ignore=ignore)
 
 
