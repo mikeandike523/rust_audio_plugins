@@ -16,24 +16,24 @@ const METER_UPDATE_SECONDS: f32 = 0.1;
 
 #[derive(Params)]
 struct BasicPluginExampleParams {
-    #[id = "saturation"]
-    saturation: FloatParam,
+    #[id = "fold"]
+    fold: FloatParam,
     #[id = "gain"]
     gain: FloatParam,
-    saturation_changed: Arc<AtomicBool>,
+    fold_changed: Arc<AtomicBool>,
     gain_changed: Arc<AtomicBool>,
 }
 
 impl Default for BasicPluginExampleParams {
     fn default() -> Self {
-        let saturation_changed = Arc::new(AtomicBool::new(false));
+        let fold_changed = Arc::new(AtomicBool::new(false));
         let gain_changed = Arc::new(AtomicBool::new(false));
 
-        let sat_changed = saturation_changed.clone();
+        let fold_changed_cb = fold_changed.clone();
         let gain_changed_cb = gain_changed.clone();
 
-        let saturation_callback = Arc::new(move |_: f32| {
-            sat_changed.store(true, Ordering::Relaxed);
+        let fold_callback = Arc::new(move |_: f32| {
+            fold_changed_cb.store(true, Ordering::Relaxed);
         });
 
         let gain_callback = Arc::new(move |_: f32| {
@@ -41,14 +41,14 @@ impl Default for BasicPluginExampleParams {
         });
 
         Self {
-            saturation: FloatParam::new(
-                "Saturation",
+            fold: FloatParam::new(
+                "Fold (k)",
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 10.0 },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.01)
-            .with_callback(saturation_callback),
+            .with_callback(fold_callback),
             gain: FloatParam::new(
                 "Gain",
                 0.0,
@@ -58,7 +58,7 @@ impl Default for BasicPluginExampleParams {
             .with_step_size(0.1)
             .with_unit(" dB")
             .with_callback(gain_callback),
-            saturation_changed,
+            fold_changed,
             gain_changed,
         }
     }
@@ -110,7 +110,7 @@ impl Default for BasicPluginExample {
 #[serde(tag = "type")]
 enum Action {
     Init,
-    SetSaturation { value: f32 },
+    SetFold { value: f32 },
     SetGain { value: f32 },
 }
 
@@ -237,14 +237,14 @@ impl Plugin for BasicPluginExample {
         let mut samples_remaining = self.meter_samples_remaining;
 
         for (_sample_id, mut channels) in buffer.iter_samples().enumerate() {
-            let saturation = self.params.saturation.smoothed.next();
+            let fold = self.params.fold.smoothed.next();
             let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
 
             let in_l = channels.get_mut(0).map(|value| *value).unwrap_or(0.0);
             let in_r = channels.get_mut(1).map(|value| *value).unwrap_or(in_l);
 
-            let out_l = (saturation * in_l).clamp(-1.0, 1.0) * gain;
-            let out_r = (saturation * in_r).clamp(-1.0, 1.0) * gain;
+            let out_l = (fold * std::f32::consts::FRAC_PI_2 * in_l).sin() * gain;
+            let out_r = (fold * std::f32::consts::FRAC_PI_2 * in_r).sin() * gain;
 
             if let Some(left) = channels.get_mut(0) {
                 *left = out_l;
@@ -272,7 +272,7 @@ impl Plugin for BasicPluginExample {
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
-        let saturation_changed = self.params.saturation_changed.clone();
+        let fold_changed = self.params.fold_changed.clone();
         let gain_changed = self.params.gain_changed.clone();
         let meter_input_l = self.meter_input_l.clone();
         let meter_input_r = self.meter_input_r.clone();
@@ -291,15 +291,15 @@ impl Plugin for BasicPluginExample {
                             Action::Init => {
                                 ctx.send_json(json!({
                                     "type": "ParamChange",
-                                    "saturation": params.saturation.value(),
+                                    "fold": params.fold.value(),
                                     "gain": params.gain.value(),
                                     "pluginVersion": env!("CARGO_PKG_VERSION"),
                                 }));
                             }
-                            Action::SetSaturation { value } => {
-                                setter.begin_set_parameter(&params.saturation);
-                                setter.set_parameter(&params.saturation, value);
-                                setter.end_set_parameter(&params.saturation);
+                            Action::SetFold { value } => {
+                                setter.begin_set_parameter(&params.fold);
+                                setter.set_parameter(&params.fold, value);
+                                setter.end_set_parameter(&params.fold);
                             }
                             Action::SetGain { value } => {
                                 setter.begin_set_parameter(&params.gain);
@@ -310,12 +310,12 @@ impl Plugin for BasicPluginExample {
                     }
                 }
 
-                if saturation_changed.swap(false, Ordering::Relaxed)
+                if fold_changed.swap(false, Ordering::Relaxed)
                     || gain_changed.swap(false, Ordering::Relaxed)
                 {
                     ctx.send_json(json!({
                         "type": "ParamChange",
-                        "saturation": params.saturation.value(),
+                        "fold": params.fold.value(),
                         "gain": params.gain.value(),
                     }));
                 }
@@ -350,7 +350,7 @@ nih_export_vst3!(BasicPluginExample);
 impl ClapPlugin for BasicPluginExample {
     const CLAP_ID: &'static str = "wthplugins.sine_fold";
     const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("Basic saturation example with gain and a webview UI");
+        Some("Sine-folding distortion with gain and a webview UI");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
 

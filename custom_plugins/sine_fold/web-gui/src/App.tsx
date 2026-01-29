@@ -8,7 +8,7 @@ type MeterValues = {
 type PluginMessage =
   | {
       type: "ParamChange";
-      saturation?: number;
+      fold?: number;
       gain?: number;
       pluginVersion?: string;
     }
@@ -30,7 +30,7 @@ const sendToPluginSafe = (payload: unknown) => {
 };
 
 export default function App() {
-  const [saturation, setSaturation] = useState(1);
+  const [fold, setFold] = useState(1);
   const [gain, setGain] = useState(0);
   const [status, setStatus] = useState("Waiting for plugin...");
   const [meterInput, setMeterInput] = useState<MeterValues>({ l: 0, r: 0 });
@@ -38,6 +38,7 @@ export default function App() {
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
   const [loadedFrom] = useState(() => window.location.href);
   const didInit = useRef(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
 
   useEffect(() => {
@@ -48,8 +49,8 @@ export default function App() {
 
     window.onPluginMessage = (message: PluginMessage) => {
       if (message.type === "ParamChange") {
-        if (typeof message.saturation === "number") {
-          setSaturation(clamp(message.saturation, 0, 10));
+        if (typeof message.fold === "number") {
+          setFold(clamp(message.fold, 0, 10));
         }
         if (typeof message.gain === "number") {
           setGain(clamp(message.gain, -24, 24));
@@ -81,10 +82,10 @@ export default function App() {
     };
   }, []);
 
-  const handleSaturationChange = (value: number) => {
+  const handleFoldChange = (value: number) => {
     const clamped = clamp(value, 0, 10);
-    setSaturation(clamped);
-    sendToPluginSafe({ type: "SetSaturation", value: clamped });
+    setFold(clamped);
+    sendToPluginSafe({ type: "SetFold", value: clamped });
   };
 
   const handleGainChange = (value: number) => {
@@ -93,12 +94,112 @@ export default function App() {
     sendToPluginSafe({ type: "SetGain", value: clamped });
   };
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const draw = () => {
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor(rect.width * dpr));
+      const height = Math.max(1, Math.floor(rect.height * dpr));
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const style = getComputedStyle(document.documentElement);
+      const gridColor = style.getPropertyValue("--meter-bg").trim() || "#efe6dc";
+      const axisColor = style.getPropertyValue("--muted").trim() || "#9a9389";
+      const curveColor = style.getPropertyValue("--accent-dark").trim() || "#b85d2b";
+      const panelColor = style.getPropertyValue("--panel").trim() || "#ffffff";
+
+      const cssWidth = rect.width;
+      const cssHeight = rect.height;
+      const padding = 18;
+      const plotWidth = Math.max(1, cssWidth - padding * 2);
+      const plotHeight = Math.max(1, cssHeight - padding * 2);
+
+      const yMax = 1;
+
+      const xToPixel = (value: number) =>
+        padding + ((value + 1) / 2) * plotWidth;
+      const yToPixel = (value: number) =>
+        padding + ((yMax - value) / (2 * yMax)) * plotHeight;
+
+      context.clearRect(0, 0, cssWidth, cssHeight);
+      context.fillStyle = panelColor;
+      context.fillRect(0, 0, cssWidth, cssHeight);
+
+      context.strokeStyle = gridColor;
+      context.lineWidth = 1;
+      context.beginPath();
+      for (let i = 1; i < 4; i += 1) {
+        const x = padding + (plotWidth / 4) * i;
+        context.moveTo(x, padding);
+        context.lineTo(x, padding + plotHeight);
+      }
+      for (let i = 1; i < 4; i += 1) {
+        const y = padding + (plotHeight / 4) * i;
+        context.moveTo(padding, y);
+        context.lineTo(padding + plotWidth, y);
+      }
+      context.stroke();
+
+      context.strokeStyle = axisColor;
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.moveTo(xToPixel(-1), yToPixel(0));
+      context.lineTo(xToPixel(1), yToPixel(0));
+      context.moveTo(xToPixel(0), yToPixel(-yMax));
+      context.lineTo(xToPixel(0), yToPixel(yMax));
+      context.stroke();
+
+      context.strokeStyle = curveColor;
+      context.lineWidth = 2;
+      context.beginPath();
+
+      const step = 1 / 200;
+      let isFirst = true;
+      for (let x = -1; x <= 1.00001; x += step) {
+        const y = Math.sin(fold * (Math.PI / 2) * x);
+        const px = xToPixel(x);
+        const py = yToPixel(y);
+        if (isFirst) {
+          context.moveTo(px, py);
+          isFirst = false;
+        } else {
+          context.lineTo(px, py);
+        }
+      }
+      context.stroke();
+    };
+
+    draw();
+    const handleResize = () => draw();
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [fold]);
+
   return (
     <div className="panel">
       <header>
         <div>
           <h1>Sine Fold</h1>
-          <div className="subtitle">Saturation + Gain</div>
+          <div className="subtitle">Sine-fold + Gain</div>
         </div>
         <div className="source">
           <div className="source-label">Loaded From</div>
@@ -108,19 +209,28 @@ export default function App() {
         </div>
       </header>
 
+      <section className="visualization">
+        <div className="visualization-header">
+          <span>Transfer Curve</span>
+          <span>v_out = sin(k * pi/2 * v_in)</span>
+        </div>
+        <div className="visualization-subtitle">Gain applies after folding.</div>
+        <canvas ref={canvasRef} className="curve-canvas" />
+      </section>
+
       <section className="controls">
         <div className="control">
-          <label htmlFor="saturation">Saturation</label>
+          <label htmlFor="fold">Fold (k)</label>
           <input
-            id="saturation"
+            id="fold"
             type="range"
             min="0"
             max="10"
             step="0.01"
-            value={saturation}
-            onChange={(event) => handleSaturationChange(Number(event.target.value))}
+            value={fold}
+            onChange={(event) => handleFoldChange(Number(event.target.value))}
           />
-          <div className="value">{saturation.toFixed(2)}x</div>
+          <div className="value">{fold.toFixed(2)}</div>
         </div>
         <div className="control">
           <label htmlFor="gain">Gain</label>

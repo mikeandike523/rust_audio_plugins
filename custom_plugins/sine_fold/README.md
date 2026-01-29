@@ -1,6 +1,6 @@
 # Sine Fold
 
-Sine Fold is a minimal saturation effect (clip(sat * input) * gain) with a webview-based GUI. It is meant to serve as a practical starter template for new plugins.
+Sine Fold is a sine-folding distortion effect (gain * sin(k * pi/2 * input)) with a webview-based GUI.
 
 ## GUI development
 
