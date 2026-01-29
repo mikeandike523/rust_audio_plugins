@@ -11,7 +11,7 @@ const GUI_HEIGHT: u32 = 800;
 const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
 const GUI_DEV_SERVER_ROUTE: &str = "/wth-plugin-name";
 const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-plugin-name";
-const GUI_PUBLISHED_URL: &str = "https://sine-fold-web-gui.vercel.app";
+const GUI_PUBLISHED_URL: &str = "https://wth-plugins-sine-fold.vercel.app";
 const METER_UPDATE_SECONDS: f32 = 0.1;
 
 #[derive(Params)]
