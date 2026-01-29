@@ -44,7 +44,7 @@ impl Default for BasicPluginExampleParams {
             fold: FloatParam::new(
                 "Fold (k)",
                 1.0,
-                FloatRange::Linear { min: 0.0, max: 10.0 },
+                FloatRange::Linear { min: 0.0, max: 50.0 },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.01)

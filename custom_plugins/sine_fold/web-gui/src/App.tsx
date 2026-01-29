@@ -50,7 +50,7 @@ export default function App() {
     window.onPluginMessage = (message: PluginMessage) => {
       if (message.type === "ParamChange") {
         if (typeof message.fold === "number") {
-          setFold(clamp(message.fold, 0, 10));
+          setFold(clamp(message.fold, 0, 50));
         }
         if (typeof message.gain === "number") {
           setGain(clamp(message.gain, -24, 24));
@@ -83,7 +83,7 @@ export default function App() {
   }, []);
 
   const handleFoldChange = (value: number) => {
-    const clamped = clamp(value, 0, 10);
+    const clamped = clamp(value, 0, 50);
     setFold(clamped);
     sendToPluginSafe({ type: "SetFold", value: clamped });
   };
@@ -225,8 +225,8 @@ export default function App() {
             id="fold"
             type="range"
             min="0"
-            max="10"
-            step="0.01"
+            max="50"
+            step="0.1"
             value={fold}
             onChange={(event) => handleFoldChange(Number(event.target.value))}
           />
