@@ -1,5 +1,5 @@
 {
-  "name": "basic-plugin-example-web-gui",
+  "name": "basic_plugin_example-web-gui",
   "private": true,
   "version": "0.0.0",
   "type": "module",

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 const GUI_WIDTH: u32 = 520;
 const GUI_HEIGHT: u32 = 300;
-const GUI_HTML: &str = include_str!("../web-gui/index.html");
+const GUI_HTML: &str = include_str!("../web-gui/embedded.html");
 const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
 const METER_UPDATE_SECONDS: f32 = 0.1;
 
@@ -310,7 +310,7 @@ impl Vst3Plugin for BasicPluginExample {
 nih_export_vst3!(BasicPluginExample);
 
 impl ClapPlugin for BasicPluginExample {
-    const CLAP_ID: &'static str = "wthplugins.basic-plugin-example";
+    const CLAP_ID: &'static str = "wthplugins.basic_plugin_example";
     const CLAP_DESCRIPTION: Option<&'static str> =
         Some("Basic saturation example with gain and a webview UI");
     const CLAP_MANUAL_URL: Option<&'static str> = None;

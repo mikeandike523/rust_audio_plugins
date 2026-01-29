@@ -7,8 +7,8 @@ Basic Plugin Example is a minimal saturation effect (clip(sat * input) * gain) w
 From the repo root:
 
 ```bash
-pnpm install
-pnpm start-basic-plugin-example-gui-dev
+pnpm --dir basic_plugin_example/web-gui install
+pnpm --dir basic_plugin_example/web-gui dev
 ```
 
 To have the plugin load the dev server instead of the embedded HTML, set:
