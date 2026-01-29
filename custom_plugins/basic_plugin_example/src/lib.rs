@@ -6,8 +6,8 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const GUI_WIDTH: u32 = 520;
-const GUI_HEIGHT: u32 = 300;
+const GUI_WIDTH: u32 = 800;
+const GUI_HEIGHT: u32 = 800;
 const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
 const GUI_DEV_SERVER_ROUTE: &str = "/wth-plugin-name";
 const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-plugin-name";
@@ -293,6 +293,7 @@ impl Plugin for BasicPluginExample {
                                     "type": "ParamChange",
                                     "saturation": params.saturation.value(),
                                     "gain": params.gain.value(),
+                                    "pluginVersion": env!("CARGO_PKG_VERSION"),
                                 }));
                             }
                             Action::SetSaturation { value } => {

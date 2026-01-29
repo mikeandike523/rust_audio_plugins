@@ -3,6 +3,10 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+const packageJson = JSON.parse(
+  fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")
+);
+
 const devProbeRoute = "/wth-plugin-name";
 
 const devProbePlugin = () => ({
@@ -51,6 +55,9 @@ const devProbePlugin = () => ({
 export default defineConfig({
   base: "./",
   plugins: [react(), devProbePlugin()],
+  define: {
+    "import.meta.env.VITE_GUI_VERSION": JSON.stringify(packageJson.version),
+  },
   build: {
     cssCodeSplit: false,
   },

@@ -6,7 +6,12 @@ type MeterValues = {
 };
 
 type PluginMessage =
-  | { type: "ParamChange"; saturation?: number; gain?: number }
+  | {
+      type: "ParamChange";
+      saturation?: number;
+      gain?: number;
+      pluginVersion?: string;
+    }
   | {
       type: "Meter";
       input?: Partial<MeterValues>;
@@ -30,8 +35,10 @@ export default function App() {
   const [status, setStatus] = useState("Waiting for plugin...");
   const [meterInput, setMeterInput] = useState<MeterValues>({ l: 0, r: 0 });
   const [meterOutput, setMeterOutput] = useState<MeterValues>({ l: 0, r: 0 });
+  const [pluginVersion, setPluginVersion] = useState<string | null>(null);
   const [loadedFrom] = useState(() => window.location.href);
   const didInit = useRef(false);
+  const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
 
   useEffect(() => {
     if (didInit.current) {
@@ -46,6 +53,9 @@ export default function App() {
         }
         if (typeof message.gain === "number") {
           setGain(clamp(message.gain, -24, 24));
+        }
+        if (typeof message.pluginVersion === "string") {
+          setPluginVersion(message.pluginVersion);
         }
         setStatus("Connected");
       }
@@ -167,6 +177,11 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      <div className="version-meta">
+        <div>plugin-version: {pluginVersion ?? "unknown"}</div>
+        <div>gui-version: {guiVersion}</div>
+      </div>
 
       <div className="footer">{status}</div>
     </div>
