@@ -360,6 +360,7 @@ def main() -> int:
         if not scripts_dest_dir.exists():
             scripts_dest_dir.mkdir(parents=True, exist_ok=True)
         copy_missing_tree(scripts_source_dir, scripts_dest_dir)
+        update_text_files(scripts_dest_dir, args.name)
         update_root_package_json_scripts(repo_root / "package.json", args.name)
         print("Step 2: copied build scripts and updated package.json scripts.")
 

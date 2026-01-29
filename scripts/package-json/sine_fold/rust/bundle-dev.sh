@@ -1,3 +1,3 @@
 #!/bin/bash
 
-cargo xtask bundle basic_plugin_example
+cargo xtask bundle sine_fold
