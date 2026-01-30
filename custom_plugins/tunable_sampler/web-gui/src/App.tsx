@@ -76,6 +76,7 @@ export default function App() {
     }
 
     const intervalId = window.setInterval(() => {
+      console.log("Requesting plugin info...");
       sendToPluginSafe({ type: "RequestPluginInfo" });
     }, 100);
 
