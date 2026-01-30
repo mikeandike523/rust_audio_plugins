@@ -5,15 +5,16 @@ type UseInitializedParamOptions<T> = {
   initialValue?: T | null;
   requestPayload: unknown;
   sendPayload?: (value: T) => unknown;
-  pollMs?: number;
+  pollMs?: number | null;
 };
 
 export const sendToPluginSafe = (payload: unknown) => {
   if (typeof window.sendToPlugin === "function") {
     window.sendToPlugin(payload);
-  } else {
-    console.info("sendToPlugin missing", payload);
+    return true;
   }
+  console.info("sendToPlugin missing", payload);
+  return false;
 };
 
 export const useInitializedParam = <T,>({
@@ -34,10 +35,13 @@ export const useInitializedParam = <T,>({
   const setValue = useCallback(
     (next: T) => {
       setValueState(next);
-      setInitialized(true);
       if (sendPayload) {
-        sendToPluginSafe(sendPayload(next));
+        const sent = sendToPluginSafe(sendPayload(next));
+        if (sent) {
+          setInitialized(true);
+        }
       } else {
+        setInitialized(true);
         console.info("No send handler for", name);
       }
     },
@@ -45,7 +49,7 @@ export const useInitializedParam = <T,>({
   );
 
   useEffect(() => {
-    if (initialized) {
+    if (initialized || pollMs === null || pollMs <= 0) {
       return;
     }
 

@@ -23,7 +23,6 @@ export default function App() {
   const [cacheFolder, setCacheFolder] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [loadedFrom] = useState(() => window.location.href);
-  const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const projectFolderInputRef = useRef<HTMLInputElement | null>(null);
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
@@ -31,33 +30,32 @@ export default function App() {
   const pluginVersionParam = useInitializedParam<string>({
     name: "pluginVersion",
     requestPayload: requestStatePayload,
+    pollMs: null,
   });
 
   const projectFolderParam = useInitializedParam<string>({
     name: "projectFolder",
     requestPayload: requestStatePayload,
     sendPayload: (value) => ({ type: "SetProjectFolder", path: value }),
+    pollMs: null,
   });
 
   const projectNameParam = useInitializedParam<string>({
     name: "projectName",
     requestPayload: requestStatePayload,
+    pollMs: null,
   });
 
   const gainParam = useInitializedParam<number>({
     name: "gain",
     requestPayload: requestStatePayload,
     sendPayload: (value) => ({ type: "SetGain", value }),
+    pollMs: null,
   });
 
   const [projectFolderDraft, setProjectFolderDraft] = useState("");
 
   useEffect(() => {
-    if (didInit.current) {
-      return;
-    }
-    didInit.current = true;
-
     window.onPluginMessage = (message: PluginMessage) => {
       if (message.type === "State") {
         let nextStatus = "Connected";
@@ -103,6 +101,27 @@ export default function App() {
       }
     };
   }, []);
+
+  const allParamsReady =
+    pluginVersionParam.ready &&
+    projectFolderParam.ready &&
+    projectNameParam.ready &&
+    gainParam.ready;
+
+  useEffect(() => {
+    if (allParamsReady) {
+      return;
+    }
+
+    sendToPluginSafe(requestStatePayload);
+    const intervalId = window.setInterval(() => {
+      sendToPluginSafe(requestStatePayload);
+    }, 200);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [allParamsReady, requestStatePayload]);
 
   useEffect(() => {
     if (document.activeElement === projectFolderInputRef.current) {

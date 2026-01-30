@@ -249,8 +249,8 @@ impl Plugin for TunableSampler {
             .with_developer_mode(true)
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
-                    if let Ok(action) = serde_json::from_value::<Action>(value) {
-                        match action {
+                    match serde_json::from_value::<Action>(value) {
+                        Ok(action) => match action {
                             Action::Init => {
                                 TunableSampler::send_state(ctx, &params);
                             }
@@ -288,6 +288,9 @@ impl Plugin for TunableSampler {
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
                             }
+                        },
+                        Err(err) => {
+                            eprintln!("tunable_sampler: failed to parse event: {err}");
                         }
                     }
                 }
