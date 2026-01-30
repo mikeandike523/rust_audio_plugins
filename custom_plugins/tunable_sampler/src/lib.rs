@@ -3,8 +3,9 @@ use nih_plug_webview::*;
 use serde::Deserialize;
 use serde_json::json;
 use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 
 const GUI_WIDTH: u32 = 800;
 const GUI_HEIGHT: u32 = 800;
@@ -13,6 +14,7 @@ const GUI_DEV_SERVER_ROUTE: &str = "/wth-plugin-name";
 const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-plugin-name";
 const GUI_PUBLISHED_URL: &str = "https://tunable-sampler-web-gui.vercel.app";
 const METER_UPDATE_SECONDS: f32 = 0.1;
+const CACHE_FOLDER_NAME: &str = "tunable_sampler_cache";
 
 #[derive(Params)]
 struct BasicPluginExampleParams {
@@ -78,6 +80,7 @@ pub struct BasicPluginExample {
     meter_output_l: Arc<AtomicF32>,
     meter_output_r: Arc<AtomicF32>,
     meter_dirty: Arc<AtomicBool>,
+    project_folder: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl Default for BasicPluginExample {
@@ -87,6 +90,7 @@ impl Default for BasicPluginExample {
         let meter_output_l = Arc::new(AtomicF32::new(0.0));
         let meter_output_r = Arc::new(AtomicF32::new(0.0));
         let meter_dirty = Arc::new(AtomicBool::new(false));
+        let project_folder = Arc::new(Mutex::new(None));
 
         Self {
             params: Arc::new(BasicPluginExampleParams::default()),
@@ -102,6 +106,7 @@ impl Default for BasicPluginExample {
             meter_output_l,
             meter_output_r,
             meter_dirty,
+            project_folder,
         }
     }
 }
@@ -112,9 +117,30 @@ enum Action {
     Init,
     SetSaturation { value: f32 },
     SetGain { value: f32 },
+    PickProjectFolder,
 }
 
 impl BasicPluginExample {
+    fn normalize_project_folder(path: PathBuf) -> Result<PathBuf, String> {
+        if path.is_dir() {
+            return Ok(path);
+        }
+        if path.is_file() {
+            return path
+                .parent()
+                .map(|parent| parent.to_path_buf())
+                .ok_or_else(|| "Dropped file has no parent directory".to_string());
+        }
+        Err("Selected path does not exist".to_string())
+    }
+
+    fn ensure_cache_folder(project_folder: &Path) -> Result<PathBuf, String> {
+        let cache_folder = project_folder.join(CACHE_FOLDER_NAME);
+        std::fs::create_dir_all(&cache_folder)
+            .map_err(|err| format!("Failed to create cache folder: {err}"))?;
+        Ok(cache_folder)
+    }
+
     fn update_meter_interval(&mut self, sample_rate: f32) {
         if (self.sample_rate - sample_rate).abs() < f32::EPSILON {
             return;
@@ -279,11 +305,31 @@ impl Plugin for BasicPluginExample {
         let meter_output_l = self.meter_output_l.clone();
         let meter_output_r = self.meter_output_r.clone();
         let meter_dirty = self.meter_dirty.clone();
+        let project_folder = self.project_folder.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
+        let (ui_event_sender, ui_event_receiver) = mpsc::channel::<UiEvent>();
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
+            .with_mouse_handler(move |event| match event {
+                MouseEvent::DragEntered { .. } => {
+                    let _ = ui_event_sender.send(UiEvent::DragEntered);
+                    EventStatus::AcceptDrop(DropEffect::Copy)
+                }
+                MouseEvent::DragMoved { .. } => EventStatus::AcceptDrop(DropEffect::Copy),
+                MouseEvent::DragLeft => {
+                    let _ = ui_event_sender.send(UiEvent::DragLeft);
+                    EventStatus::Ignored
+                }
+                MouseEvent::DragDropped { data, .. } => {
+                    if let DropData::Files(files) = data {
+                        let _ = ui_event_sender.send(UiEvent::Dropped(files));
+                    }
+                    EventStatus::AcceptDrop(DropEffect::Copy)
+                }
+                _ => EventStatus::Ignored,
+            })
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     if let Ok(action) = serde_json::from_value::<Action>(value) {
@@ -295,6 +341,16 @@ impl Plugin for BasicPluginExample {
                                     "gain": params.gain.value(),
                                     "pluginVersion": env!("CARGO_PKG_VERSION"),
                                 }));
+                                if let Ok(guard) = project_folder.lock() {
+                                    if let Some(existing) = guard.as_ref() {
+                                        let cache_folder = existing.join(CACHE_FOLDER_NAME);
+                                        ctx.send_json(json!({
+                                            "type": "ProjectFolderSelected",
+                                            "path": existing.to_string_lossy(),
+                                            "cachePath": cache_folder.to_string_lossy(),
+                                        }));
+                                    }
+                                }
                             }
                             Action::SetSaturation { value } => {
                                 setter.begin_set_parameter(&params.saturation);
@@ -306,6 +362,31 @@ impl Plugin for BasicPluginExample {
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
                             }
+                            Action::PickProjectFolder => {
+                                let picked = rfd::FileDialog::new()
+                                    .set_title("Choose a DAW project folder")
+                                    .pick_folder();
+                                if let Some(path) = picked {
+                                    handle_project_folder_selection(&project_folder, ctx, path);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for ui_event in ui_event_receiver.try_iter() {
+                    match ui_event {
+                        UiEvent::DragEntered => {
+                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": true }));
+                        }
+                        UiEvent::DragLeft => {
+                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": false }));
+                        }
+                        UiEvent::Dropped(paths) => {
+                            if let Some(path) = paths.into_iter().next() {
+                                handle_project_folder_selection(&project_folder, ctx, path);
+                            }
+                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": false }));
                         }
                     }
                 }
@@ -336,6 +417,41 @@ impl Plugin for BasicPluginExample {
             });
 
         Some(Box::new(editor))
+    }
+}
+
+enum UiEvent {
+    DragEntered,
+    DragLeft,
+    Dropped(Vec<PathBuf>),
+}
+
+fn handle_project_folder_selection(
+    project_folder: &Arc<Mutex<Option<PathBuf>>>,
+    ctx: &WindowHandler,
+    path: PathBuf,
+) {
+    match BasicPluginExample::normalize_project_folder(path)
+        .and_then(|folder| {
+            let cache_folder = BasicPluginExample::ensure_cache_folder(&folder)?;
+            if let Ok(mut guard) = project_folder.lock() {
+                *guard = Some(folder.clone());
+            }
+            Ok((folder, cache_folder))
+        }) {
+        Ok((folder, cache_folder)) => {
+            ctx.send_json(json!({
+                "type": "ProjectFolderSelected",
+                "path": folder.to_string_lossy(),
+                "cachePath": cache_folder.to_string_lossy(),
+            }));
+        }
+        Err(message) => {
+            ctx.send_json(json!({
+                "type": "ProjectFolderError",
+                "message": message,
+            }));
+        }
     }
 }
 

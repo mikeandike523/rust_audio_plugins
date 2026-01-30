@@ -13,6 +13,19 @@ type PluginMessage =
       pluginVersion?: string;
     }
   | {
+      type: "ProjectFolderSelected";
+      path: string;
+      cachePath: string;
+    }
+  | {
+      type: "ProjectFolderError";
+      message: string;
+    }
+  | {
+      type: "ProjectFolderDrag";
+      active: boolean;
+    }
+  | {
       type: "Meter";
       input?: Partial<MeterValues>;
       output?: Partial<MeterValues>;
@@ -36,6 +49,10 @@ export default function App() {
   const [meterInput, setMeterInput] = useState<MeterValues>({ l: 0, r: 0 });
   const [meterOutput, setMeterOutput] = useState<MeterValues>({ l: 0, r: 0 });
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
+  const [projectFolder, setProjectFolder] = useState<string | null>(null);
+  const [cacheFolder, setCacheFolder] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
@@ -60,6 +77,22 @@ export default function App() {
         setStatus("Connected");
       }
 
+      if (message.type === "ProjectFolderSelected") {
+        setProjectFolder(message.path);
+        setCacheFolder(message.cachePath);
+        setFolderError(null);
+        setStatus("Project folder set");
+      }
+
+      if (message.type === "ProjectFolderError") {
+        setFolderError(message.message);
+        setStatus("Project folder error");
+      }
+
+      if (message.type === "ProjectFolderDrag") {
+        setIsDragActive(message.active);
+      }
+
       if (message.type === "Meter") {
         setMeterInput({
           l: clamp(message.input?.l ?? 0, 0, 1),
@@ -74,10 +107,20 @@ export default function App() {
 
     sendToPluginSafe({ type: "Init" });
 
+    const preventDefault = (event: DragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("dragover", preventDefault);
+    window.addEventListener("drop", preventDefault);
+
     return () => {
       if (window.onPluginMessage) {
         window.onPluginMessage = undefined;
       }
+      window.removeEventListener("dragover", preventDefault);
+      window.removeEventListener("drop", preventDefault);
     };
   }, []);
 
@@ -91,6 +134,11 @@ export default function App() {
     const clamped = clamp(value, -24, 24);
     setGain(clamped);
     sendToPluginSafe({ type: "SetGain", value: clamped });
+  };
+
+  const handlePickProjectFolder = () => {
+    sendToPluginSafe({ type: "PickProjectFolder" });
+    setStatus("Opening folder picker...");
   };
 
   return (
@@ -107,6 +155,32 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      <section className="setup">
+        <div className="setup-header">
+          <div>
+            <div className="section-label">Project Folder</div>
+            <div className="section-subtitle">
+              Choose the DAW project folder where the cache will live.
+            </div>
+          </div>
+          <button className="pick-button" type="button" onClick={handlePickProjectFolder}>
+            Choose Folder
+          </button>
+        </div>
+        <div className={`drop-zone ${isDragActive ? "is-active" : ""}`}>
+          <div className="drop-title">
+            Drag & drop your project folder here
+          </div>
+          <div className="drop-path">
+            {projectFolder ?? "No folder selected"}
+          </div>
+          {cacheFolder ? (
+            <div className="drop-cache">Cache: {cacheFolder}</div>
+          ) : null}
+          {folderError ? <div className="drop-error">{folderError}</div> : null}
+        </div>
+      </section>
 
       <section className="controls">
         <div className="control">
