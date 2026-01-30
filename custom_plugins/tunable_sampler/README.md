@@ -1,6 +1,6 @@
 # Tunable Sampler
 
-Tunable Sampler is a minimal saturation effect (clip(sat * input) * gain) with a webview-based GUI. It is meant to serve as a practical starter template for new plugins.
+Tunable Sampler is a work-in-progress instrument with a webview-based GUI. It currently outputs silence and focuses on project-folder setup for sampler development.
 
 ## GUI development
 
