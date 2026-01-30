@@ -27,7 +27,6 @@ pub struct TunableSampler {
     project_folder: Arc<Mutex<Option<PathBuf>>>,
     pending_folder_result: Arc<Mutex<Option<FolderSelectionResult>>>,
     pending_folder_dirty: Arc<AtomicBool>,
-    picker_open: Arc<AtomicBool>,
 }
 
 impl Default for TunableSampler {
@@ -35,14 +34,12 @@ impl Default for TunableSampler {
         let project_folder = Arc::new(Mutex::new(None));
         let pending_folder_result = Arc::new(Mutex::new(None));
         let pending_folder_dirty = Arc::new(AtomicBool::new(false));
-        let picker_open = Arc::new(AtomicBool::new(false));
 
         Self {
             params: Arc::new(TunableSamplerParams::default()),
             project_folder,
             pending_folder_result,
             pending_folder_dirty,
-            picker_open,
         }
     }
 }
@@ -51,7 +48,7 @@ impl Default for TunableSampler {
 #[serde(tag = "type")]
 enum Action {
     Init,
-    PickProjectFolder,
+    RequestPluginInfo,
 }
 
 enum FolderSelectionResult {
@@ -95,6 +92,37 @@ impl TunableSampler {
             *guard = Some(folder.clone());
         }
         Ok((folder, cache_folder))
+    }
+
+    fn queue_folder_result(
+        pending_folder_result: &Arc<Mutex<Option<FolderSelectionResult>>>,
+        pending_folder_dirty: &Arc<AtomicBool>,
+        result: FolderSelectionResult,
+    ) {
+        if let Ok(mut guard) = pending_folder_result.lock() {
+            *guard = Some(result);
+        }
+        pending_folder_dirty.store(true, Ordering::Relaxed);
+    }
+
+    fn send_plugin_info(
+        ctx: &WindowHandler,
+        project_folder: &Arc<Mutex<Option<PathBuf>>>,
+    ) {
+        ctx.send_json(json!({
+            "type": "PluginInfo",
+            "pluginVersion": env!("CARGO_PKG_VERSION"),
+        }));
+        if let Ok(guard) = project_folder.lock() {
+            if let Some(existing) = guard.as_ref() {
+                let cache_folder = existing.join(CACHE_FOLDER_NAME);
+                ctx.send_json(json!({
+                    "type": "ProjectFolderSelected",
+                    "path": existing.to_string_lossy(),
+                    "cachePath": cache_folder.to_string_lossy(),
+                }));
+            }
+        }
     }
 
     fn resolve_gui_url() -> &'static str {
@@ -173,71 +201,72 @@ impl Plugin for TunableSampler {
         let project_folder = self.project_folder.clone();
         let pending_folder_result = self.pending_folder_result.clone();
         let pending_folder_dirty = self.pending_folder_dirty.clone();
-        let picker_open = self.picker_open.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
+            .with_mouse_handler({
+                let project_folder = project_folder.clone();
+                let pending_folder_result = pending_folder_result.clone();
+                let pending_folder_dirty = pending_folder_dirty.clone();
+                move |event| match event {
+                    MouseEvent::DragEntered { .. } | MouseEvent::DragMoved { .. } => {
+                        EventStatus::AcceptDrop(DropEffect::Copy)
+                    }
+                    MouseEvent::DragLeft => EventStatus::Ignored,
+                    MouseEvent::DragDropped { data, .. } => {
+                        if let DropData::Files(files) = data {
+                            if let Some(path) = files.into_iter().next() {
+                                let project_folder = project_folder.clone();
+                                let pending_folder_result = pending_folder_result.clone();
+                                let pending_folder_dirty = pending_folder_dirty.clone();
+                                std::thread::spawn(move || {
+                                    let result = TunableSampler::resolve_project_folder(
+                                        &project_folder,
+                                        path,
+                                    );
+                                    TunableSampler::queue_folder_result(
+                                        &pending_folder_result,
+                                        &pending_folder_dirty,
+                                        match result {
+                                            Ok((folder, cache_folder)) => {
+                                                FolderSelectionResult::Selected {
+                                                    folder,
+                                                    cache_folder,
+                                                }
+                                            }
+                                            Err(message) => {
+                                                FolderSelectionResult::Error { message }
+                                            }
+                                        },
+                                    );
+                                });
+                            } else {
+                                TunableSampler::queue_folder_result(
+                                    &pending_folder_result,
+                                    &pending_folder_dirty,
+                                    FolderSelectionResult::Error {
+                                        message: "Dropped data did not include any files."
+                                            .to_string(),
+                                    },
+                                );
+                            }
+                        }
+
+                        EventStatus::AcceptDrop(DropEffect::Copy)
+                    }
+                    _ => EventStatus::Ignored,
+                }
+            })
             .with_event_loop(move |ctx, _setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     if let Ok(action) = serde_json::from_value::<Action>(value) {
                         match action {
                             Action::Init => {
-                                ctx.send_json(json!({
-                                    "type": "PluginInfo",
-                                    "pluginVersion": env!("CARGO_PKG_VERSION"),
-                                }));
-                                if let Ok(guard) = project_folder.lock() {
-                                    if let Some(existing) = guard.as_ref() {
-                                        let cache_folder = existing.join(CACHE_FOLDER_NAME);
-                                        ctx.send_json(json!({
-                                            "type": "ProjectFolderSelected",
-                                            "path": existing.to_string_lossy(),
-                                            "cachePath": cache_folder.to_string_lossy(),
-                                        }));
-                                    }
-                                }
+                                TunableSampler::send_plugin_info(ctx, &project_folder);
                             }
-                            Action::PickProjectFolder => {
-                                if picker_open.swap(true, Ordering::SeqCst) {
-                                    continue;
-                                }
-                                let picked = tinyfiledialogs::select_folder_dialog(
-                                    "Choose a DAW project folder",
-                                    "",
-                                );
-                                picker_open.store(false, Ordering::SeqCst);
-
-                                if let Some(path) = picked {
-                                    let project_folder = project_folder.clone();
-                                    let pending_folder_result = pending_folder_result.clone();
-                                    let pending_folder_dirty = pending_folder_dirty.clone();
-                                    std::thread::spawn(move || {
-                                        let result = TunableSampler::resolve_project_folder(
-                                            &project_folder,
-                                            PathBuf::from(path),
-                                        );
-                                        if let Ok(mut guard) = pending_folder_result.lock() {
-                                            *guard = Some(match result {
-                                                Ok((folder, cache_folder)) => {
-                                                    FolderSelectionResult::Selected {
-                                                        folder,
-                                                        cache_folder,
-                                                    }
-                                                }
-                                                Err(message) => {
-                                                    FolderSelectionResult::Error { message }
-                                                }
-                                            });
-                                        }
-                                        pending_folder_dirty.store(true, Ordering::Relaxed);
-                                    });
-                                } else {
-                                    ctx.send_json(json!({
-                                        "type": "ProjectFolderError",
-                                        "message": "Folder selection canceled.",
-                                    }));
-                                }
+                            Action::RequestPluginInfo => {
+                                TunableSampler::send_plugin_info(ctx, &project_folder);
                             }
                         }
                     }

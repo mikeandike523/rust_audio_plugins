@@ -70,10 +70,19 @@ export default function App() {
     };
   }, []);
 
-  const handlePickProjectFolder = () => {
-    sendToPluginSafe({ type: "PickProjectFolder" });
-    setStatus("Opening folder picker...");
-  };
+  useEffect(() => {
+    if (pluginVersion) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      sendToPluginSafe({ type: "RequestPluginInfo" });
+    }, 100);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [pluginVersion]);
 
   return (
     <div className="panel">
@@ -95,15 +104,12 @@ export default function App() {
           <div>
             <div className="section-label">Project Folder</div>
             <div className="section-subtitle">
-              Choose the DAW project folder where the cache will live.
+              Drag and drop the DAW project folder onto this window.
             </div>
           </div>
-          <button className="pick-button" type="button" onClick={handlePickProjectFolder}>
-            Choose Folder
-          </button>
         </div>
         <div className="drop-zone">
-          <div className="drop-title">Selected folder</div>
+          <div className="drop-title">Drop a folder to set the project</div>
           <div className="drop-path">
             {projectFolder ?? "No folder selected"}
           </div>
