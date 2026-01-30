@@ -10,8 +10,6 @@ use std::sync::{Arc, Mutex};
 const GUI_WIDTH: u32 = 800;
 const GUI_HEIGHT: u32 = 800;
 const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
-const GUI_DEV_SERVER_ROUTE: &str = "/wth-plugin-name";
-const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-plugin-name";
 const GUI_PUBLISHED_URL: &str = "https://tunable-sampler-web-gui.vercel.app";
 const METER_UPDATE_SECONDS: f32 = 0.1;
 const CACHE_FOLDER_NAME: &str = "tunable_sampler_cache";
@@ -46,7 +44,10 @@ impl Default for BasicPluginExampleParams {
             saturation: FloatParam::new(
                 "Saturation",
                 1.0,
-                FloatRange::Linear { min: 0.0, max: 10.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 10.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.01)
@@ -54,7 +55,10 @@ impl Default for BasicPluginExampleParams {
             gain: FloatParam::new(
                 "Gain",
                 0.0,
-                FloatRange::Linear { min: -24.0, max: 24.0 },
+                FloatRange::Linear {
+                    min: -24.0,
+                    max: 24.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.1)
@@ -214,26 +218,11 @@ impl BasicPluginExample {
                     .build(),
             );
 
-            client.get(GUI_DEV_SERVER_PROBE_URL).call()
+            client.get(GUI_DEV_SERVER_URL).call()
         })
         .join()
         {
-            Ok(Ok(response)) => {
-                let content_type = response.header("Content-Type").unwrap_or("");
-                if content_type.starts_with("text/") {
-                    println!(
-                        "Local dev server detected at {}{}",
-                        GUI_DEV_SERVER_URL, GUI_DEV_SERVER_ROUTE
-                    );
-                    GUI_DEV_SERVER_PROBE_URL
-                } else {
-                    println!(
-                        "Local dev server response was not text ({}), using production URL: {}",
-                        content_type, GUI_PUBLISHED_URL
-                    );
-                    GUI_PUBLISHED_URL
-                }
-            }
+            Ok(Ok(response)) => GUI_DEV_SERVER_URL,
             _ => {
                 println!(
                     "Local dev server not available, using production URL: {}",
