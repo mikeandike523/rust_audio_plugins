@@ -140,11 +140,6 @@ h1 {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.drop-zone.is-active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(224, 122, 63, 0.2);
-}
-
 .drop-title {
   font-size: 12px;
   font-weight: 600;

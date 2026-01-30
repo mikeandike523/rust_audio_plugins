@@ -5,7 +5,7 @@ use serde_json::json;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 const GUI_WIDTH: u32 = 800;
 const GUI_HEIGHT: u32 = 800;
@@ -81,6 +81,9 @@ pub struct BasicPluginExample {
     meter_output_r: Arc<AtomicF32>,
     meter_dirty: Arc<AtomicBool>,
     project_folder: Arc<Mutex<Option<PathBuf>>>,
+    pending_folder_result: Arc<Mutex<Option<FolderSelectionResult>>>,
+    pending_folder_dirty: Arc<AtomicBool>,
+    picker_open: Arc<AtomicBool>,
 }
 
 impl Default for BasicPluginExample {
@@ -91,6 +94,9 @@ impl Default for BasicPluginExample {
         let meter_output_r = Arc::new(AtomicF32::new(0.0));
         let meter_dirty = Arc::new(AtomicBool::new(false));
         let project_folder = Arc::new(Mutex::new(None));
+        let pending_folder_result = Arc::new(Mutex::new(None));
+        let pending_folder_dirty = Arc::new(AtomicBool::new(false));
+        let picker_open = Arc::new(AtomicBool::new(false));
 
         Self {
             params: Arc::new(BasicPluginExampleParams::default()),
@@ -107,6 +113,9 @@ impl Default for BasicPluginExample {
             meter_output_r,
             meter_dirty,
             project_folder,
+            pending_folder_result,
+            pending_folder_dirty,
+            picker_open,
         }
     }
 }
@@ -118,6 +127,16 @@ enum Action {
     SetSaturation { value: f32 },
     SetGain { value: f32 },
     PickProjectFolder,
+}
+
+enum FolderSelectionResult {
+    Selected {
+        folder: PathBuf,
+        cache_folder: PathBuf,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl BasicPluginExample {
@@ -139,6 +158,18 @@ impl BasicPluginExample {
         std::fs::create_dir_all(&cache_folder)
             .map_err(|err| format!("Failed to create cache folder: {err}"))?;
         Ok(cache_folder)
+    }
+
+    fn resolve_project_folder(
+        project_folder: &Arc<Mutex<Option<PathBuf>>>,
+        path: PathBuf,
+    ) -> Result<(PathBuf, PathBuf), String> {
+        let folder = Self::normalize_project_folder(path)?;
+        let cache_folder = Self::ensure_cache_folder(&folder)?;
+        if let Ok(mut guard) = project_folder.lock() {
+            *guard = Some(folder.clone());
+        }
+        Ok((folder, cache_folder))
     }
 
     fn update_meter_interval(&mut self, sample_rate: f32) {
@@ -306,30 +337,13 @@ impl Plugin for BasicPluginExample {
         let meter_output_r = self.meter_output_r.clone();
         let meter_dirty = self.meter_dirty.clone();
         let project_folder = self.project_folder.clone();
+        let pending_folder_result = self.pending_folder_result.clone();
+        let pending_folder_dirty = self.pending_folder_dirty.clone();
+        let picker_open = self.picker_open.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
-        let (ui_event_sender, ui_event_receiver) = mpsc::channel::<UiEvent>();
-
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
-            .with_mouse_handler(move |event| match event {
-                MouseEvent::DragEntered { .. } => {
-                    let _ = ui_event_sender.send(UiEvent::DragEntered);
-                    EventStatus::AcceptDrop(DropEffect::Copy)
-                }
-                MouseEvent::DragMoved { .. } => EventStatus::AcceptDrop(DropEffect::Copy),
-                MouseEvent::DragLeft => {
-                    let _ = ui_event_sender.send(UiEvent::DragLeft);
-                    EventStatus::Ignored
-                }
-                MouseEvent::DragDropped { data, .. } => {
-                    if let DropData::Files(files) = data {
-                        let _ = ui_event_sender.send(UiEvent::Dropped(files));
-                    }
-                    EventStatus::AcceptDrop(DropEffect::Copy)
-                }
-                _ => EventStatus::Ignored,
-            })
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     if let Ok(action) = serde_json::from_value::<Action>(value) {
@@ -363,30 +377,46 @@ impl Plugin for BasicPluginExample {
                                 setter.end_set_parameter(&params.gain);
                             }
                             Action::PickProjectFolder => {
-                                let picked = rfd::FileDialog::new()
-                                    .set_title("Choose a DAW project folder")
-                                    .pick_folder();
+                                if picker_open.swap(true, Ordering::SeqCst) {
+                                    continue;
+                                }
+                                let picked = tinyfiledialogs::select_folder_dialog(
+                                    "Choose a DAW project folder",
+                                    "",
+                                );
+                                picker_open.store(false, Ordering::SeqCst);
+
                                 if let Some(path) = picked {
-                                    handle_project_folder_selection(&project_folder, ctx, path);
+                                    let project_folder = project_folder.clone();
+                                    let pending_folder_result = pending_folder_result.clone();
+                                    let pending_folder_dirty = pending_folder_dirty.clone();
+                                    std::thread::spawn(move || {
+                                        let result = BasicPluginExample::resolve_project_folder(
+                                            &project_folder,
+                                            PathBuf::from(path),
+                                        );
+                                        if let Ok(mut guard) = pending_folder_result.lock() {
+                                            *guard = Some(match result {
+                                                Ok((folder, cache_folder)) => {
+                                                    FolderSelectionResult::Selected {
+                                                        folder,
+                                                        cache_folder,
+                                                    }
+                                                }
+                                                Err(message) => {
+                                                    FolderSelectionResult::Error { message }
+                                                }
+                                            });
+                                        }
+                                        pending_folder_dirty.store(true, Ordering::Relaxed);
+                                    });
+                                } else {
+                                    ctx.send_json(json!({
+                                        "type": "ProjectFolderError",
+                                        "message": "Folder selection canceled.",
+                                    }));
                                 }
                             }
-                        }
-                    }
-                }
-
-                for ui_event in ui_event_receiver.try_iter() {
-                    match ui_event {
-                        UiEvent::DragEntered => {
-                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": true }));
-                        }
-                        UiEvent::DragLeft => {
-                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": false }));
-                        }
-                        UiEvent::Dropped(paths) => {
-                            if let Some(path) = paths.into_iter().next() {
-                                handle_project_folder_selection(&project_folder, ctx, path);
-                            }
-                            ctx.send_json(json!({ "type": "ProjectFolderDrag", "active": false }));
                         }
                     }
                 }
@@ -414,44 +444,34 @@ impl Plugin for BasicPluginExample {
                         },
                     }));
                 }
+
+                if pending_folder_dirty.swap(false, Ordering::Relaxed) {
+                    if let Ok(mut guard) = pending_folder_result.lock() {
+                        if let Some(result) = guard.take() {
+                            match result {
+                                FolderSelectionResult::Selected {
+                                    folder,
+                                    cache_folder,
+                                } => {
+                                    ctx.send_json(json!({
+                                        "type": "ProjectFolderSelected",
+                                        "path": folder.to_string_lossy(),
+                                        "cachePath": cache_folder.to_string_lossy(),
+                                    }));
+                                }
+                                FolderSelectionResult::Error { message } => {
+                                    ctx.send_json(json!({
+                                        "type": "ProjectFolderError",
+                                        "message": message,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
         Some(Box::new(editor))
-    }
-}
-
-enum UiEvent {
-    DragEntered,
-    DragLeft,
-    Dropped(Vec<PathBuf>),
-}
-
-fn handle_project_folder_selection(
-    project_folder: &Arc<Mutex<Option<PathBuf>>>,
-    ctx: &WindowHandler,
-    path: PathBuf,
-) {
-    match BasicPluginExample::normalize_project_folder(path)
-        .and_then(|folder| {
-            let cache_folder = BasicPluginExample::ensure_cache_folder(&folder)?;
-            if let Ok(mut guard) = project_folder.lock() {
-                *guard = Some(folder.clone());
-            }
-            Ok((folder, cache_folder))
-        }) {
-        Ok((folder, cache_folder)) => {
-            ctx.send_json(json!({
-                "type": "ProjectFolderSelected",
-                "path": folder.to_string_lossy(),
-                "cachePath": cache_folder.to_string_lossy(),
-            }));
-        }
-        Err(message) => {
-            ctx.send_json(json!({
-                "type": "ProjectFolderError",
-                "message": message,
-            }));
-        }
     }
 }
 

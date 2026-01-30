@@ -22,10 +22,6 @@ type PluginMessage =
       message: string;
     }
   | {
-      type: "ProjectFolderDrag";
-      active: boolean;
-    }
-  | {
       type: "Meter";
       input?: Partial<MeterValues>;
       output?: Partial<MeterValues>;
@@ -52,7 +48,6 @@ export default function App() {
   const [projectFolder, setProjectFolder] = useState<string | null>(null);
   const [cacheFolder, setCacheFolder] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
-  const [isDragActive, setIsDragActive] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
@@ -89,10 +84,6 @@ export default function App() {
         setStatus("Project folder error");
       }
 
-      if (message.type === "ProjectFolderDrag") {
-        setIsDragActive(message.active);
-      }
-
       if (message.type === "Meter") {
         setMeterInput({
           l: clamp(message.input?.l ?? 0, 0, 1),
@@ -107,20 +98,10 @@ export default function App() {
 
     sendToPluginSafe({ type: "Init" });
 
-    const preventDefault = (event: DragEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-    };
-
-    window.addEventListener("dragover", preventDefault);
-    window.addEventListener("drop", preventDefault);
-
     return () => {
       if (window.onPluginMessage) {
         window.onPluginMessage = undefined;
       }
-      window.removeEventListener("dragover", preventDefault);
-      window.removeEventListener("drop", preventDefault);
     };
   }, []);
 
@@ -168,10 +149,8 @@ export default function App() {
             Choose Folder
           </button>
         </div>
-        <div className={`drop-zone ${isDragActive ? "is-active" : ""}`}>
-          <div className="drop-title">
-            Drag & drop your project folder here
-          </div>
+        <div className="drop-zone">
+          <div className="drop-title">Selected folder</div>
           <div className="drop-path">
             {projectFolder ?? "No folder selected"}
           </div>
