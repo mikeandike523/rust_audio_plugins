@@ -18,6 +18,9 @@ type PluginMessage =
       projectFolder?: string | null;
       cachePath?: string | null;
       projectName?: string | null;
+      projectSampleRate?: number | null;
+      resamplePointsInput?: number | null;
+      resamplePointsPitch?: number | null;
       gain?: number | null;
     }
   | {
@@ -34,6 +37,35 @@ type PluginMessage =
   | {
       type: "SampleSaveError";
       message: string;
+    }
+  | {
+      type: "CachedSample";
+      name?: string | null;
+      sample_rate: number;
+      channels: number;
+      frames: number;
+      data_base64: string;
+    }
+  | {
+      type: "CachedSampleError";
+      message: string;
+    }
+  | {
+      type: "ResampleStarted";
+      label: string;
+      progress?: number | null;
+    }
+  | {
+      type: "ResampleProgress";
+      progress: number;
+    }
+  | {
+      type: "ResampleComplete";
+      message?: string | null;
+    }
+  | {
+      type: "ResampleError";
+      message: string;
     };
 
 type SampleInfo = {
@@ -44,8 +76,17 @@ type SampleInfo = {
   duration: number;
 };
 
+type ResampleModalState = {
+  label: string;
+  progress: number;
+  status: "working" | "done" | "error";
+  message?: string;
+};
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+const RESAMPLE_OPTIONS = [128, 256, 512, 1024, 2048] as const;
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
   const bytes = new Uint8Array(buffer);
@@ -56,6 +97,15 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
     binary += String.fromCharCode(...chunk);
   }
   return window.btoa(binary);
+};
+
+const base64ToFloat32Array = (dataBase64: string) => {
+  const binary = window.atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Float32Array(bytes.buffer);
 };
 
 const drawWaveform = (
@@ -120,6 +170,9 @@ export default function App() {
   const [sampleInfo, setSampleInfo] = useState<SampleInfo | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
+  const [resampleModal, setResampleModal] =
+    useState<ResampleModalState | null>(null);
+  const [resampleFading, setResampleFading] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
@@ -129,6 +182,7 @@ export default function App() {
   const waveformContainerRef = useRef<HTMLDivElement | null>(null);
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const resampleTimeoutRef = useRef<number | null>(null);
 
   const pluginVersionParam = useInitializedParam<string>({
     name: "pluginVersion",
@@ -149,10 +203,32 @@ export default function App() {
     pollMs: null,
   });
 
+  const projectSampleRateParam = useInitializedParam<number>({
+    name: "projectSampleRate",
+    requestPayload: requestStatePayload,
+    pollMs: null,
+  });
+
   const gainParam = useInitializedParam<number>({
     name: "gain",
     requestPayload: requestStatePayload,
     sendPayload: (value) => ({ type: "SetGain", value }),
+    pollMs: null,
+  });
+
+  const resamplePointsInputParam = useInitializedParam<number>({
+    name: "resamplePointsInput",
+    initialValue: RESAMPLE_OPTIONS[2],
+    requestPayload: requestStatePayload,
+    sendPayload: (value) => ({ type: "SetResamplePointsInput", points: value }),
+    pollMs: null,
+  });
+
+  const resamplePointsPitchParam = useInitializedParam<number>({
+    name: "resamplePointsPitch",
+    initialValue: RESAMPLE_OPTIONS[2],
+    requestPayload: requestStatePayload,
+    sendPayload: (value) => ({ type: "SetResamplePointsPitch", points: value }),
     pollMs: null,
   });
 
@@ -184,6 +260,23 @@ export default function App() {
         } else if (typeof message.projectName === "string") {
           projectNameParam.setFromPlugin(message.projectName);
         }
+        if (message.projectSampleRate === null) {
+          projectSampleRateParam.setFromPlugin(null);
+        } else if (typeof message.projectSampleRate === "number") {
+          projectSampleRateParam.setFromPlugin(
+            Math.round(message.projectSampleRate),
+          );
+        }
+        if (message.resamplePointsInput === null) {
+          resamplePointsInputParam.setFromPlugin(null);
+        } else if (typeof message.resamplePointsInput === "number") {
+          resamplePointsInputParam.setFromPlugin(message.resamplePointsInput);
+        }
+        if (message.resamplePointsPitch === null) {
+          resamplePointsPitchParam.setFromPlugin(null);
+        } else if (typeof message.resamplePointsPitch === "number") {
+          resamplePointsPitchParam.setFromPlugin(message.resamplePointsPitch);
+        }
         if (message.gain === null) {
           gainParam.setFromPlugin(null);
         } else if (typeof message.gain === "number") {
@@ -210,6 +303,119 @@ export default function App() {
         setSampleError(message.message);
         setStatus("Sample save error");
       }
+
+      if (message.type === "CachedSample") {
+        if (audioBufferRef.current) return;
+
+        try {
+          const interleaved = base64ToFloat32Array(message.data_base64);
+          const expectedLength = message.frames * message.channels;
+          if (interleaved.length !== expectedLength) {
+            throw new Error(
+              `Sample cache size mismatch (expected ${expectedLength} frames, got ${interleaved.length}).`,
+            );
+          }
+
+          const ctx = getAudioContext();
+          const audioBuffer = ctx.createBuffer(
+            message.channels,
+            message.frames,
+            message.sample_rate,
+          );
+          for (let ch = 0; ch < message.channels; ch += 1) {
+            const channelData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < message.frames; i += 1) {
+              channelData[i] = interleaved[i * message.channels + ch];
+            }
+          }
+          audioBufferRef.current = audioBuffer;
+
+          setSampleInfo({
+            name: message.name ?? "Cached sample",
+            sampleRate: message.sample_rate,
+            channels: message.channels,
+            frames: message.frames,
+            duration: message.frames / message.sample_rate,
+          });
+          setSampleError(null);
+          setStatus(
+            `Sample loaded from cache${
+              message.name ? `: ${message.name}` : ""
+            }`,
+          );
+        } catch (err) {
+          const errorMessage =
+            err instanceof Error
+              ? err.message
+              : "Failed to load cached sample.";
+          setSampleError(errorMessage);
+          setStatus("Cached sample load error");
+        }
+      }
+
+      if (message.type === "CachedSampleError") {
+        setSampleError(message.message);
+        setStatus("Cached sample error");
+      }
+
+      if (message.type === "ResampleStarted") {
+        if (resampleTimeoutRef.current) {
+          window.clearTimeout(resampleTimeoutRef.current);
+          resampleTimeoutRef.current = null;
+        }
+        setResampleFading(false);
+        setResampleModal({
+          label: message.label,
+          progress: message.progress ?? 0,
+          status: "working",
+        });
+      }
+
+      if (message.type === "ResampleProgress") {
+        setResampleModal((prev) => {
+          if (!prev) {
+            return {
+              label: "Resampling...",
+              progress: message.progress,
+              status: "working",
+            };
+          }
+          return {
+            ...prev,
+            progress: message.progress,
+            status: "working",
+          };
+        });
+      }
+
+      if (message.type === "ResampleComplete") {
+        setResampleModal((prev) => ({
+          label: prev?.label ?? "Resample complete",
+          progress: 1,
+          status: "done",
+          message: message.message ?? undefined,
+        }));
+        setResampleFading(true);
+        resampleTimeoutRef.current = window.setTimeout(() => {
+          setResampleModal(null);
+          setResampleFading(false);
+          resampleTimeoutRef.current = null;
+        }, 800);
+      }
+
+      if (message.type === "ResampleError") {
+        setResampleModal({
+          label: "Resample failed",
+          progress: 1,
+          status: "error",
+          message: message.message,
+        });
+        setResampleFading(false);
+        resampleTimeoutRef.current = window.setTimeout(() => {
+          setResampleModal(null);
+          resampleTimeoutRef.current = null;
+        }, 1600);
+      }
     };
 
     sendToPluginSafe({ type: "Init" });
@@ -218,6 +424,10 @@ export default function App() {
       if (window.onPluginMessage) {
         window.onPluginMessage = undefined;
       }
+      if (resampleTimeoutRef.current) {
+        window.clearTimeout(resampleTimeoutRef.current);
+        resampleTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -225,7 +435,10 @@ export default function App() {
     pluginVersionParam.ready &&
     projectFolderParam.ready &&
     projectNameParam.ready &&
-    gainParam.ready;
+    projectSampleRateParam.ready &&
+    gainParam.ready &&
+    resamplePointsInputParam.ready &&
+    resamplePointsPitchParam.ready;
 
   useEffect(() => {
     if (allParamsReady) {
@@ -287,6 +500,24 @@ export default function App() {
   const handleGainChange = (value: number) => {
     const clamped = clamp(value, -24, 24);
     gainParam.setValue(clamped);
+  };
+
+  const handleResamplePointsInputChange = (
+    event: ChangeEvent<HTMLSelectElement>,
+  ) => {
+    const points = Number(event.target.value);
+    if (!Number.isNaN(points)) {
+      resamplePointsInputParam.setValue(points);
+    }
+  };
+
+  const handleResamplePointsPitchChange = (
+    event: ChangeEvent<HTMLSelectElement>,
+  ) => {
+    const points = Number(event.target.value);
+    if (!Number.isNaN(points)) {
+      resamplePointsPitchParam.setValue(points);
+    }
   };
 
   const handleAudioFile = async (file: File) => {
@@ -396,6 +627,12 @@ export default function App() {
           {cacheFolder ? (
             <div className="project-meta">Cache: {cacheFolder}</div>
           ) : null}
+          <div className="project-meta">
+            Host sample rate:{" "}
+            {projectSampleRateParam.value === null
+              ? "--"
+              : `${projectSampleRateParam.value} Hz`}
+          </div>
           {folderError ? (
             <div className="project-error">{folderError}</div>
           ) : null}
@@ -491,6 +728,50 @@ export default function App() {
               : `${gainParam.value.toFixed(1)} dB`}
           </div>
         </div>
+
+        <div className="control">
+          <label htmlFor="resample-input">
+            Resample Points (Project Match)
+          </label>
+          <select
+            id="resample-input"
+            value={resamplePointsInputParam.value ?? RESAMPLE_OPTIONS[2]}
+            onChange={handleResamplePointsInputChange}
+          >
+            {RESAMPLE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option} points
+              </option>
+            ))}
+          </select>
+          <div className="value">
+            {resamplePointsInputParam.value === null
+              ? "--"
+              : `${resamplePointsInputParam.value} points`}
+          </div>
+        </div>
+
+        <div className="control">
+          <label htmlFor="resample-pitch">
+            Resample Points (Pitch Adjust)
+          </label>
+          <select
+            id="resample-pitch"
+            value={resamplePointsPitchParam.value ?? RESAMPLE_OPTIONS[2]}
+            onChange={handleResamplePointsPitchChange}
+          >
+            {RESAMPLE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option} points
+              </option>
+            ))}
+          </select>
+          <div className="value">
+            {resamplePointsPitchParam.value === null
+              ? "--"
+              : `${resamplePointsPitchParam.value} points`}
+          </div>
+        </div>
       </section>
 
       <footer className="footer">
@@ -505,6 +786,30 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {resampleModal ? (
+        <div
+          className={`progress-backdrop${
+            resampleFading ? " is-fading" : ""
+          }`}
+        >
+          <div className="progress-modal" role="status" aria-live="polite">
+            <div className="progress-title">{resampleModal.label}</div>
+            <div className="progress-bar">
+              <div
+                className="progress-fill"
+                style={{
+                  width: `${Math.round(resampleModal.progress * 100)}%`,
+                }}
+              />
+            </div>
+            <div className="progress-copy">
+              {resampleModal.message ??
+                `${Math.round(resampleModal.progress * 100)}%`}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {needsProjectFolder ? (
         <div className="modal-backdrop">

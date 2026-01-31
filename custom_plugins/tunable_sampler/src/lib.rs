@@ -1,59 +1,41 @@
-use base64::{engine::general_purpose, Engine as _};
+mod cache;
+mod constants;
+mod params;
+mod resample;
+mod types;
+
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
-use serde::Deserialize;
 use serde_json::json;
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-const GUI_WIDTH: u32 = 800;
-const GUI_HEIGHT: u32 = 800;
-const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
-const GUI_PUBLISHED_URL: &str = "https://tunable-sampler-web-gui.vercel.app";
-const CACHE_FOLDER_NAME: &str = "tunable_sampler_cache";
-
-#[derive(Params)]
-struct TunableSamplerParams {
-    #[id = "gain"]
-    gain: FloatParam,
-    gain_changed: Arc<AtomicBool>,
-    #[persist = "project_folder"]
-    project_folder: Arc<Mutex<Option<String>>>,
-}
-
-impl Default for TunableSamplerParams {
-    fn default() -> Self {
-        let gain_changed = Arc::new(AtomicBool::new(false));
-        let gain_changed_cb = gain_changed.clone();
-        let gain_callback = Arc::new(move |_: f32| {
-            gain_changed_cb.store(true, Ordering::Relaxed);
-        });
-
-        Self {
-            gain: FloatParam::new(
-                "Gain",
-                0.0,
-                FloatRange::Linear {
-                    min: -24.0,
-                    max: 24.0,
-                },
-            )
-            .with_smoother(SmoothingStyle::Linear(5.0))
-            .with_step_size(0.1)
-            .with_unit(" dB")
-            .with_callback(gain_callback),
-            gain_changed,
-            project_folder: Arc::new(Mutex::new(None)),
-        }
-    }
-}
+use crate::cache::{
+    build_project_state, cache_folder_from_params, ensure_cache_folder,
+    queue_folder_result, resolve_project_folder, sample_cache_exists,
+    send_cached_sample_if_available, save_sample_to_cache,
+};
+use crate::constants::{
+    DEFAULT_RESAMPLE_POINTS, GUI_DEV_SERVER_URL, GUI_HEIGHT, GUI_PUBLISHED_URL, GUI_WIDTH,
+};
+use crate::params::TunableSamplerParams;
+use crate::resample::spawn_resample_task;
+use crate::types::{Action, FolderSelectionResult, ResampleEvent};
 
 pub struct TunableSampler {
     params: Arc<TunableSamplerParams>,
     pending_folder_result: Arc<Mutex<Option<FolderSelectionResult>>>,
     pending_folder_dirty: Arc<AtomicBool>,
+    sample_rate_hz: Arc<AtomicU32>,
+    sample_rate_dirty: Arc<AtomicBool>,
+    resample_points_input: Arc<AtomicU32>,
+    resample_points_pitch: Arc<AtomicU32>,
+    resample_requested: Arc<AtomicBool>,
+    resample_in_progress: Arc<AtomicBool>,
+    resample_events: Arc<Mutex<Vec<ResampleEvent>>>,
+    resample_events_dirty: Arc<AtomicBool>,
 }
 
 impl Default for TunableSampler {
@@ -65,107 +47,28 @@ impl Default for TunableSampler {
             params: Arc::new(TunableSamplerParams::default()),
             pending_folder_result,
             pending_folder_dirty,
+            sample_rate_hz: Arc::new(AtomicU32::new(0)),
+            sample_rate_dirty: Arc::new(AtomicBool::new(false)),
+            resample_points_input: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_POINTS)),
+            resample_points_pitch: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_POINTS)),
+            resample_requested: Arc::new(AtomicBool::new(false)),
+            resample_in_progress: Arc::new(AtomicBool::new(false)),
+            resample_events: Arc::new(Mutex::new(Vec::new())),
+            resample_events_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-enum Action {
-    Init,
-    RequestState,
-    PickProjectFolder,
-    SetProjectFolder { path: String },
-    SetGain { value: f32 },
-    SaveSample {
-        name: String,
-        sample_rate: u32,
-        channels: u16,
-        frames: u32,
-        data_base64: String,
-    },
-}
-
-enum FolderSelectionResult {
-    Selected {
-        folder: PathBuf,
-        cache_folder: PathBuf,
-    },
-    Canceled,
-    Error {
-        message: String,
-    },
 }
 
 impl TunableSampler {
-    fn normalize_project_folder(path: PathBuf) -> Result<PathBuf, String> {
-        if path.is_dir() {
-            return Ok(path);
-        }
-        if path.is_file() {
-            return path
-                .parent()
-                .map(|parent| parent.to_path_buf())
-                .ok_or_else(|| "Dropped file has no parent directory".to_string());
-        }
-        Err("Selected path does not exist".to_string())
-    }
-
-    fn ensure_cache_folder(project_folder: &Path) -> Result<PathBuf, String> {
-        let cache_folder = project_folder.join(CACHE_FOLDER_NAME);
-        std::fs::create_dir_all(&cache_folder)
-            .map_err(|err| format!("Failed to create cache folder: {err}"))?;
-        Ok(cache_folder)
-    }
-
-    fn resolve_project_folder(
-        project_folder: &Arc<Mutex<Option<String>>>,
-        path: String,
-    ) -> Result<(PathBuf, PathBuf), String> {
-        let folder = Self::normalize_project_folder(PathBuf::from(path))?;
-        let cache_folder = Self::ensure_cache_folder(&folder)?;
-        if let Ok(mut guard) = project_folder.lock() {
-            *guard = Some(folder.to_string_lossy().to_string());
-        }
-        Ok((folder, cache_folder))
-    }
-
-    fn queue_folder_result(
-        pending_folder_result: &Arc<Mutex<Option<FolderSelectionResult>>>,
-        pending_folder_dirty: &Arc<AtomicBool>,
-        result: FolderSelectionResult,
+    fn send_state(
+        ctx: &WindowHandler,
+        params: &Arc<TunableSamplerParams>,
+        sample_rate_hz: &Arc<AtomicU32>,
+        resample_points_input: &Arc<AtomicU32>,
+        resample_points_pitch: &Arc<AtomicU32>,
     ) {
-        if let Ok(mut guard) = pending_folder_result.lock() {
-            *guard = Some(result);
-        }
-        pending_folder_dirty.store(true, Ordering::Relaxed);
-    }
-
-    fn build_project_state(
-        project_folder: &Arc<Mutex<Option<String>>>,
-    ) -> (Option<String>, Option<String>, Option<String>) {
-        if let Ok(guard) = project_folder.lock() {
-            if let Some(existing) = guard.as_ref() {
-                let folder_path = PathBuf::from(existing);
-                let project_name = folder_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| name.to_string());
-                let cache_folder = folder_path.join(CACHE_FOLDER_NAME);
-                return (
-                    Some(existing.clone()),
-                    Some(cache_folder.to_string_lossy().to_string()),
-                    project_name,
-                );
-            }
-        }
-
-        (None, None, None)
-    }
-
-    fn send_state(ctx: &WindowHandler, params: &Arc<TunableSamplerParams>) {
         let (project_folder, cache_folder, project_name) =
-            Self::build_project_state(&params.project_folder);
+            build_project_state(&params.project_folder);
 
         ctx.send_json(json!({
             "type": "State",
@@ -174,53 +77,11 @@ impl TunableSampler {
             "cachePath": cache_folder,
             "projectName": project_name,
             "gain": params.gain.value(),
+            "projectSampleRate": sample_rate_hz.load(Ordering::Relaxed),
+            "resamplePointsInput": resample_points_input.load(Ordering::Relaxed),
+            "resamplePointsPitch": resample_points_pitch.load(Ordering::Relaxed),
         }));
     }
-
-    fn save_sample_to_cache(
-        cache_folder: &Path,
-        name: &str,
-        sample_rate: u32,
-        channels: u16,
-        frames: u32,
-        data_base64: &str,
-    ) -> Result<(), String> {
-        if sample_rate == 0 {
-            return Err("Sample rate cannot be zero.".to_string());
-        }
-        let decoded = general_purpose::STANDARD
-            .decode(data_base64.as_bytes())
-            .map_err(|err| format!("Failed to decode sample data: {err}"))?;
-        let expected_len = frames as u64 * channels as u64 * 4;
-        if decoded.len() as u64 != expected_len {
-            return Err(format!(
-                "Sample data size mismatch (expected {expected_len} bytes, got {})",
-                decoded.len()
-            ));
-        }
-
-        let array_path = cache_folder.join("sample.array");
-        std::fs::write(&array_path, decoded)
-            .map_err(|err| format!("Failed to write sample.array: {err}"))?;
-
-        let metadata = json!({
-            "name": name,
-            "sample_rate": sample_rate,
-            "channels": channels,
-            "frames": frames,
-            "length_seconds": frames as f32 / sample_rate as f32,
-            "format": "f32le",
-            "layout": "interleaved"
-        });
-        let json_path = cache_folder.join("sample.json");
-        let json_bytes = serde_json::to_vec_pretty(&metadata)
-            .map_err(|err| format!("Failed to serialize sample.json: {err}"))?;
-        std::fs::write(&json_path, json_bytes)
-            .map_err(|err| format!("Failed to write sample.json: {err}"))?;
-
-        Ok(())
-    }
-
     fn resolve_gui_url() -> &'static str {
         match std::thread::spawn(move || {
             use std::time::Duration;
@@ -273,9 +134,12 @@ impl Plugin for TunableSampler {
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
-        _buffer_config: &BufferConfig,
+        buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        self.sample_rate_hz
+            .store(buffer_config.sample_rate.round() as u32, Ordering::Relaxed);
+        self.sample_rate_dirty.store(true, Ordering::Relaxed);
         true
     }
 
@@ -285,7 +149,13 @@ impl Plugin for TunableSampler {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let _ = context;
+        let sample_rate = context.transport().sample_rate.round() as u32;
+        if sample_rate != self.sample_rate_hz.load(Ordering::Relaxed) {
+            self.sample_rate_hz.store(sample_rate, Ordering::Relaxed);
+            self.sample_rate_dirty.store(true, Ordering::Relaxed);
+            self.resample_requested.store(true, Ordering::Relaxed);
+        }
+
         for channel in buffer.as_slice().iter_mut() {
             channel.fill(0.0);
         }
@@ -297,8 +167,18 @@ impl Plugin for TunableSampler {
         let params = self.params.clone();
         let pending_folder_result = self.pending_folder_result.clone();
         let pending_folder_dirty = self.pending_folder_dirty.clone();
+        let sample_rate_hz = self.sample_rate_hz.clone();
+        let sample_rate_dirty = self.sample_rate_dirty.clone();
+        let resample_points_input = self.resample_points_input.clone();
+        let resample_points_pitch = self.resample_points_pitch.clone();
+        let resample_requested = self.resample_requested.clone();
+        let resample_in_progress = self.resample_in_progress.clone();
+        let resample_events = self.resample_events.clone();
+        let resample_events_dirty = self.resample_events_dirty.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
+        let last_cache_folder: Mutex<Option<PathBuf>> = Mutex::new(None);
+        let can_send_cached_sample = AtomicBool::new(false);
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
             .with_event_loop(move |ctx, setter, _window| {
@@ -306,10 +186,24 @@ impl Plugin for TunableSampler {
                     match serde_json::from_value::<Action>(value) {
                         Ok(action) => match action {
                             Action::Init => {
-                                TunableSampler::send_state(ctx, &params);
+                                can_send_cached_sample.store(true, Ordering::Relaxed);
+                                TunableSampler::send_state(
+                                    ctx,
+                                    &params,
+                                    &sample_rate_hz,
+                                    &resample_points_input,
+                                    &resample_points_pitch,
+                                );
                             }
                             Action::RequestState => {
-                                TunableSampler::send_state(ctx, &params);
+                                can_send_cached_sample.store(true, Ordering::Relaxed);
+                                TunableSampler::send_state(
+                                    ctx,
+                                    &params,
+                                    &sample_rate_hz,
+                                    &resample_points_input,
+                                    &resample_points_pitch,
+                                );
                             }
                             Action::PickProjectFolder => {
                                 let project_folder = params.project_folder.clone();
@@ -323,7 +217,7 @@ impl Plugin for TunableSampler {
                                         default_path.as_deref().unwrap_or(""),
                                     );
                                     let result = match selection {
-                                        Some(path) => TunableSampler::resolve_project_folder(
+                                        Some(path) => resolve_project_folder(
                                             &project_folder,
                                             path,
                                         )
@@ -338,7 +232,7 @@ impl Plugin for TunableSampler {
                                         }),
                                         None => FolderSelectionResult::Canceled,
                                     };
-                                    TunableSampler::queue_folder_result(
+                                    queue_folder_result(
                                         &pending_folder_result,
                                         &pending_folder_dirty,
                                         result,
@@ -350,11 +244,11 @@ impl Plugin for TunableSampler {
                                 let pending_folder_result = pending_folder_result.clone();
                                 let pending_folder_dirty = pending_folder_dirty.clone();
                                 std::thread::spawn(move || {
-                                    let result = TunableSampler::resolve_project_folder(
+                                    let result = resolve_project_folder(
                                         &project_folder,
                                         path,
                                     );
-                                    TunableSampler::queue_folder_result(
+                                    queue_folder_result(
                                         &pending_folder_result,
                                         &pending_folder_dirty,
                                         match result {
@@ -375,6 +269,21 @@ impl Plugin for TunableSampler {
                                 setter.begin_set_parameter(&params.gain);
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
+                            }
+                            Action::SetResamplePointsInput { points } => {
+                                resample_points_input.store(points, Ordering::Relaxed);
+                                resample_requested.store(true, Ordering::Relaxed);
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "resamplePointsInput": points,
+                                }));
+                            }
+                            Action::SetResamplePointsPitch { points } => {
+                                resample_points_pitch.store(points, Ordering::Relaxed);
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "resamplePointsPitch": points,
+                                }));
                             }
                             Action::SaveSample {
                                 name,
@@ -397,8 +306,7 @@ impl Plugin for TunableSampler {
                                 };
 
                                 let cache_folder =
-                                    match Self::ensure_cache_folder(&PathBuf::from(project_folder))
-                                    {
+                                    match ensure_cache_folder(&PathBuf::from(project_folder)) {
                                         Ok(folder) => folder,
                                         Err(message) => {
                                             ctx.send_json(json!({
@@ -409,7 +317,7 @@ impl Plugin for TunableSampler {
                                         }
                                     };
 
-                                match Self::save_sample_to_cache(
+                                match save_sample_to_cache(
                                     &cache_folder,
                                     &name,
                                     sample_rate,
@@ -422,6 +330,7 @@ impl Plugin for TunableSampler {
                                             "type": "SampleSaved",
                                             "name": name,
                                         }));
+                                        resample_requested.store(true, Ordering::Relaxed);
                                     }
                                     Err(message) => {
                                         ctx.send_json(json!({
@@ -456,6 +365,9 @@ impl Plugin for TunableSampler {
                                         "cachePath": cache_folder.to_string_lossy(),
                                         "projectName": project_name,
                                     }));
+                                    if sample_cache_exists(&cache_folder) {
+                                        resample_requested.store(true, Ordering::Relaxed);
+                                    }
                                 }
                                 FolderSelectionResult::Error { message } => {
                                     ctx.send_json(json!({
@@ -478,6 +390,103 @@ impl Plugin for TunableSampler {
                         "type": "State",
                         "gain": params.gain.value(),
                     }));
+                }
+
+                if sample_rate_dirty.swap(false, Ordering::Relaxed) {
+                    ctx.send_json(json!({
+                        "type": "State",
+                        "projectSampleRate": sample_rate_hz.load(Ordering::Relaxed),
+                    }));
+                }
+
+                if can_send_cached_sample.load(Ordering::Relaxed) {
+                    if let Some(cache_folder) =
+                        cache_folder_from_params(&params.project_folder)
+                    {
+                        let mut should_check = true;
+                        if let Ok(mut guard) = last_cache_folder.lock() {
+                            should_check = guard
+                                .as_ref()
+                                .map(|previous| previous != &cache_folder)
+                                .unwrap_or(true);
+                            if should_check {
+                                *guard = Some(cache_folder.clone());
+                            }
+                        }
+                        if should_check {
+                            match send_cached_sample_if_available(ctx, &cache_folder) {
+                                Ok(found) => {
+                                    if found {
+                                        resample_requested.store(true, Ordering::Relaxed);
+                                    }
+                                }
+                                Err(message) => {
+                                    ctx.send_json(json!({
+                                        "type": "CachedSampleError",
+                                        "message": message,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if resample_events_dirty.swap(false, Ordering::Relaxed) {
+                    if let Ok(mut guard) = resample_events.lock() {
+                        let events: Vec<ResampleEvent> = guard.drain(..).collect();
+                        drop(guard);
+                        for event in events {
+                            match event {
+                                ResampleEvent::Started { label } => {
+                                    ctx.send_json(json!({
+                                        "type": "ResampleStarted",
+                                        "label": label,
+                                        "progress": 0.0,
+                                    }));
+                                }
+                                ResampleEvent::Progress { progress } => {
+                                    ctx.send_json(json!({
+                                        "type": "ResampleProgress",
+                                        "progress": progress,
+                                    }));
+                                }
+                                ResampleEvent::Completed { message } => {
+                                    ctx.send_json(json!({
+                                        "type": "ResampleComplete",
+                                        "message": message,
+                                    }));
+                                }
+                                ResampleEvent::Error { message } => {
+                                    ctx.send_json(json!({
+                                        "type": "ResampleError",
+                                        "message": message,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if resample_requested.load(Ordering::Relaxed)
+                    && !resample_in_progress.load(Ordering::Relaxed)
+                {
+                    if let Some(cache_folder) =
+                        cache_folder_from_params(&params.project_folder)
+                    {
+                        let target_rate = sample_rate_hz.load(Ordering::Relaxed);
+                        if target_rate > 0 && sample_cache_exists(&cache_folder) {
+                            resample_requested.store(false, Ordering::Relaxed);
+                            resample_in_progress.store(true, Ordering::Relaxed);
+                            spawn_resample_task(
+                                cache_folder,
+                                target_rate,
+                                resample_points_input.load(Ordering::Relaxed),
+                                resample_in_progress.clone(),
+                                resample_events.clone(),
+                                resample_events_dirty.clone(),
+                            );
+                        }
+                    }
                 }
             });
 
