@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { sendToPluginSafe, useInitializedParam } from "./hooks/useInitializedParam";
+import {
+  sendToPluginSafe,
+  useInitializedParam,
+} from "./hooks/useInitializedParam";
 
 type PluginMessage =
   | {
@@ -13,6 +16,9 @@ type PluginMessage =
   | {
       type: "ProjectFolderError";
       message: string;
+    }
+  | {
+      type: "ProjectFolderCanceled";
     };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -54,9 +60,12 @@ export default function App() {
   });
 
   const [projectFolderDraft, setProjectFolderDraft] = useState("");
+  const needsProjectFolder = projectFolderParam.value === null;
 
   useEffect(() => {
-    window.onPluginMessage = (message: PluginMessage) => {
+    (window as { onPluginMessage?: Function }).onPluginMessage = (
+      message: PluginMessage,
+    ) => {
       if (message.type === "State") {
         let nextStatus = "Connected";
         if (typeof message.pluginVersion === "string") {
@@ -90,6 +99,10 @@ export default function App() {
       if (message.type === "ProjectFolderError") {
         setFolderError(message.message);
         setStatus("Project folder error");
+      }
+
+      if (message.type === "ProjectFolderCanceled") {
+        setStatus("Folder picker canceled");
       }
     };
 
@@ -145,6 +158,12 @@ export default function App() {
     projectFolderParam.setValue(trimmed);
   };
 
+  const requestProjectFolderPicker = () => {
+    setFolderError(null);
+    setStatus("Opening folder picker...");
+    sendToPluginSafe({ type: "PickProjectFolder" });
+  };
+
   const handleGainChange = (value: number) => {
     const clamped = clamp(value, -24, 24);
     gainParam.setValue(clamped);
@@ -166,31 +185,8 @@ export default function App() {
       </header>
 
       <section className="setup">
-        <div className="setup-header">
-          <div>
-            <div className="section-label">Project Folder</div>
-            <div className="section-subtitle">
-              Paste the DAW project folder path to initialize the sampler.
-            </div>
-          </div>
-        </div>
-        <div className="path-input">
-          <input
-            ref={projectFolderInputRef}
-            type="text"
-            placeholder="C:\\Projects\\MySamplerProject"
-            value={projectFolderDraft}
-            onChange={(event) => setProjectFolderDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                handleProjectFolderCommit();
-              }
-            }}
-          />
-          <button className="apply-button" onClick={handleProjectFolderCommit}>
-            Set Folder
-          </button>
-        </div>
+
+
         <div className="drop-zone">
           <div className="drop-title">Current project</div>
           <div className="drop-path">
@@ -220,7 +216,9 @@ export default function App() {
             disabled={gainParam.value === null}
           />
           <div className="value">
-            {gainParam.value === null ? "--" : `${gainParam.value.toFixed(1)} dB`}
+            {gainParam.value === null
+              ? "--"
+              : `${gainParam.value.toFixed(1)} dB`}
           </div>
         </div>
       </section>
@@ -231,6 +229,39 @@ export default function App() {
       </div>
 
       <div className="footer">{status}</div>
+      {needsProjectFolder ? (
+        <div className="modal-backdrop">
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-folder-required-title"
+          >
+            <div className="modal-title" id="project-folder-required-title">
+              Select a project folder to continue
+            </div>
+            <div className="modal-copy">
+              This sampler needs your DAW project folder before the rest of the
+              controls unlock.
+            </div>
+            <div className="path-input modal-input">
+
+              <button
+                className="pick-button"
+                type="button"
+                onClick={() => {
+                  requestProjectFolderPicker();
+                }}
+              >
+                Pick Folder
+              </button>
+            </div>
+            {folderError ? (
+              <div className="modal-error">{folderError}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

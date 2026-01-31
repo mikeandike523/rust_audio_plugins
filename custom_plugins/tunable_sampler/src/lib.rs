@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 const GUI_WIDTH: u32 = 800;
 const GUI_HEIGHT: u32 = 800;
-const GUI_DEV_SERVER_URL: &str = "http://localhost:5173?version=0.0.3";
+const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
 const GUI_PUBLISHED_URL: &str = "https://tunable-sampler-web-gui.vercel.app";
 const CACHE_FOLDER_NAME: &str = "tunable_sampler_cache";
 
@@ -73,6 +73,7 @@ impl Default for TunableSampler {
 enum Action {
     Init,
     RequestState,
+    PickProjectFolder,
     SetProjectFolder { path: String },
     SetGain { value: f32 },
 }
@@ -82,6 +83,7 @@ enum FolderSelectionResult {
         folder: PathBuf,
         cache_folder: PathBuf,
     },
+    Canceled,
     Error {
         message: String,
     },
@@ -257,6 +259,40 @@ impl Plugin for TunableSampler {
                             Action::RequestState => {
                                 TunableSampler::send_state(ctx, &params);
                             }
+                            Action::PickProjectFolder => {
+                                let project_folder = params.project_folder.clone();
+                                let pending_folder_result = pending_folder_result.clone();
+                                let pending_folder_dirty = pending_folder_dirty.clone();
+                                std::thread::spawn(move || {
+                                    let default_path =
+                                        project_folder.lock().ok().and_then(|guard| guard.clone());
+                                    let selection = tinyfiledialogs::select_folder_dialog(
+                                        "Select project folder",
+                                        default_path.as_deref().unwrap_or(""),
+                                    );
+                                    let result = match selection {
+                                        Some(path) => TunableSampler::resolve_project_folder(
+                                            &project_folder,
+                                            path,
+                                        )
+                                        .map(|(folder, cache_folder)| {
+                                            FolderSelectionResult::Selected {
+                                                folder,
+                                                cache_folder,
+                                            }
+                                        })
+                                        .unwrap_or_else(|message| {
+                                            FolderSelectionResult::Error { message }
+                                        }),
+                                        None => FolderSelectionResult::Canceled,
+                                    };
+                                    TunableSampler::queue_folder_result(
+                                        &pending_folder_result,
+                                        &pending_folder_dirty,
+                                        result,
+                                    );
+                                });
+                            }
                             Action::SetProjectFolder { path } => {
                                 let project_folder = params.project_folder.clone();
                                 let pending_folder_result = pending_folder_result.clone();
@@ -318,6 +354,11 @@ impl Plugin for TunableSampler {
                                     ctx.send_json(json!({
                                         "type": "ProjectFolderError",
                                         "message": message,
+                                    }));
+                                }
+                                FolderSelectionResult::Canceled => {
+                                    ctx.send_json(json!({
+                                        "type": "ProjectFolderCanceled",
                                     }));
                                 }
                             }
