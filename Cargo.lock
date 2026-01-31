@@ -3299,8 +3299,9 @@ dependencies = [
 
 [[package]]
 name = "tunable_sampler"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
+ "base64 0.22.1",
  "nih_plug",
  "nih_plug_webview",
  "serde",

@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use serde::Deserialize;
@@ -76,6 +77,13 @@ enum Action {
     PickProjectFolder,
     SetProjectFolder { path: String },
     SetGain { value: f32 },
+    SaveSample {
+        name: String,
+        sample_rate: u32,
+        channels: u16,
+        frames: u32,
+        data_base64: String,
+    },
 }
 
 enum FolderSelectionResult {
@@ -167,6 +175,50 @@ impl TunableSampler {
             "projectName": project_name,
             "gain": params.gain.value(),
         }));
+    }
+
+    fn save_sample_to_cache(
+        cache_folder: &Path,
+        name: &str,
+        sample_rate: u32,
+        channels: u16,
+        frames: u32,
+        data_base64: &str,
+    ) -> Result<(), String> {
+        if sample_rate == 0 {
+            return Err("Sample rate cannot be zero.".to_string());
+        }
+        let decoded = general_purpose::STANDARD
+            .decode(data_base64.as_bytes())
+            .map_err(|err| format!("Failed to decode sample data: {err}"))?;
+        let expected_len = frames as u64 * channels as u64 * 4;
+        if decoded.len() as u64 != expected_len {
+            return Err(format!(
+                "Sample data size mismatch (expected {expected_len} bytes, got {})",
+                decoded.len()
+            ));
+        }
+
+        let array_path = cache_folder.join("sample.array");
+        std::fs::write(&array_path, decoded)
+            .map_err(|err| format!("Failed to write sample.array: {err}"))?;
+
+        let metadata = json!({
+            "name": name,
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "frames": frames,
+            "length_seconds": frames as f32 / sample_rate as f32,
+            "format": "f32le",
+            "layout": "interleaved"
+        });
+        let json_path = cache_folder.join("sample.json");
+        let json_bytes = serde_json::to_vec_pretty(&metadata)
+            .map_err(|err| format!("Failed to serialize sample.json: {err}"))?;
+        std::fs::write(&json_path, json_bytes)
+            .map_err(|err| format!("Failed to write sample.json: {err}"))?;
+
+        Ok(())
     }
 
     fn resolve_gui_url() -> &'static str {
@@ -323,6 +375,61 @@ impl Plugin for TunableSampler {
                                 setter.begin_set_parameter(&params.gain);
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
+                            }
+                            Action::SaveSample {
+                                name,
+                                sample_rate,
+                                channels,
+                                frames,
+                                data_base64,
+                            } => {
+                                let project_folder = params
+                                    .project_folder
+                                    .lock()
+                                    .ok()
+                                    .and_then(|guard| guard.clone());
+                                let Some(project_folder) = project_folder else {
+                                    ctx.send_json(json!({
+                                        "type": "SampleSaveError",
+                                        "message": "Project folder not set.",
+                                    }));
+                                    continue;
+                                };
+
+                                let cache_folder =
+                                    match Self::ensure_cache_folder(&PathBuf::from(project_folder))
+                                    {
+                                        Ok(folder) => folder,
+                                        Err(message) => {
+                                            ctx.send_json(json!({
+                                                "type": "SampleSaveError",
+                                                "message": message,
+                                            }));
+                                            continue;
+                                        }
+                                    };
+
+                                match Self::save_sample_to_cache(
+                                    &cache_folder,
+                                    &name,
+                                    sample_rate,
+                                    channels,
+                                    frames,
+                                    &data_base64,
+                                ) {
+                                    Ok(()) => {
+                                        ctx.send_json(json!({
+                                            "type": "SampleSaved",
+                                            "name": name,
+                                        }));
+                                    }
+                                    Err(message) => {
+                                        ctx.send_json(json!({
+                                            "type": "SampleSaveError",
+                                            "message": message,
+                                        }));
+                                    }
+                                }
                             }
                         },
                         Err(err) => {
