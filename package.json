@@ -5,28 +5,19 @@
   "main": "index.js",
   "scripts": {
     
-    "basic_plugin_example:gui:start-dev":"bash scripts/package-json/basic_plugin_example/gui/start-dev.sh",
     "basic_plugin_example:rust:bundle-dev":"bash scripts/package-json/basic_plugin_example/rust/bundle-dev.sh",
     "basic_plugin_example:rust:bundle-release":"bash scripts/package-json/basic_plugin_example/rust/bundle-release.sh",
-    "basic_plugin_example:gui:publish":"bash scripts/package-json/basic_plugin_example/gui/publish.sh",
 
-    "mixmean:gui:start-dev":"bash scripts/package-json/mixmean/gui/start-dev.sh",
     "mixmean:rust:bundle-dev":"bash scripts/package-json/mixmean/rust/bundle-dev.sh",
     "mixmean:rust:bundle-release":"bash scripts/package-json/mixmean/rust/bundle-release.sh",
 
-    "harmonic_nxo:gui:start-dev":"bash scripts/package-json/harmonic_nxo/gui/start-dev.sh",
     "harmonic_nxo:rust:bundle-dev":"bash scripts/package-json/harmonic_nxo/rust/bundle-dev.sh",
     "harmonic_nxo:rust:bundle-release":"bash scripts/package-json/harmonic_nxo/rust/bundle-release.sh",
-    "harmonic_nxo:gui:publish":"bash scripts/package-json/harmonic_nxo/gui/publish.sh",
 
 
-    "sine_fold:gui:start-dev":"bash scripts/package-json/sine_fold/gui/start-dev.sh",
-    "sine_fold:gui:publish":"bash scripts/package-json/sine_fold/gui/publish.sh",
     "sine_fold:rust:bundle-dev":"bash scripts/package-json/sine_fold/rust/bundle-dev.sh",
     "sine_fold:rust:bundle-release":"bash scripts/package-json/sine_fold/rust/bundle-release.sh",
 
-    "tunable_sampler:gui:start-dev":"bash scripts/package-json/tunable_sampler/gui/start-dev.sh",
-    "tunable_sampler:gui:publish":"bash scripts/package-json/tunable_sampler/gui/publish.sh",
     "tunable_sampler:rust:bundle-dev":"bash scripts/package-json/tunable_sampler/rust/bundle-dev.sh",
     "tunable_sampler:rust:bundle-release":"bash scripts/package-json/tunable_sampler/rust/bundle-release.sh",
 
