@@ -1,0 +1,270 @@
+import {
+  useEffect,
+  useRef,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
+
+import { sendToPluginSafe } from "./useInitializedParam";
+import { base64ToFloat32Array, clamp } from "../utils/audio";
+import type { ResampleModalState, SampleInfo } from "../types/appTypes";
+import type { PluginMessage } from "../types/appTypes";
+
+type InitializedParam<T> = {
+  ready: boolean;
+  setFromPlugin: (value: T | null) => void;
+  setValue: (value: T) => void;
+  value: T | null;
+};
+
+type UsePluginMessagesOptions = {
+  pluginVersionParam: InitializedParam<string>;
+  projectFolderParam: InitializedParam<string>;
+  projectNameParam: InitializedParam<string>;
+  projectSampleRateParam: InitializedParam<number>;
+  gainParam: InitializedParam<number>;
+  resamplePointsInputParam: InitializedParam<number>;
+  resamplePointsPitchParam: InitializedParam<number>;
+  setStatus: Dispatch<SetStateAction<string>>;
+  setCacheFolder: Dispatch<SetStateAction<string | null>>;
+  setFolderError: Dispatch<SetStateAction<string | null>>;
+  setSampleError: Dispatch<SetStateAction<string | null>>;
+  setSampleInfo: Dispatch<SetStateAction<SampleInfo | null>>;
+  setResampleModal: Dispatch<SetStateAction<ResampleModalState | null>>;
+  setResampleFading: Dispatch<SetStateAction<boolean>>;
+  audioBufferRef: MutableRefObject<AudioBuffer | null>;
+  getAudioContext: () => AudioContext;
+};
+
+export const usePluginMessages = ({
+  pluginVersionParam,
+  projectFolderParam,
+  projectNameParam,
+  projectSampleRateParam,
+  gainParam,
+  resamplePointsInputParam,
+  resamplePointsPitchParam,
+  setStatus,
+  setCacheFolder,
+  setFolderError,
+  setSampleError,
+  setSampleInfo,
+  setResampleModal,
+  setResampleFading,
+  audioBufferRef,
+  getAudioContext,
+}: UsePluginMessagesOptions) => {
+  const resampleTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    (window as { onPluginMessage?: (message: PluginMessage) => void })
+      .onPluginMessage = (message) => {
+      if (message.type === "State") {
+        let nextStatus = "Connected";
+        if (typeof message.pluginVersion === "string") {
+          pluginVersionParam.setFromPlugin(message.pluginVersion);
+        }
+        if (message.projectFolder === null) {
+          projectFolderParam.setFromPlugin(null);
+        } else if (typeof message.projectFolder === "string") {
+          projectFolderParam.setFromPlugin(message.projectFolder);
+          setFolderError(null);
+          nextStatus = "Project folder set";
+        }
+        if (message.cachePath === null) {
+          setCacheFolder(null);
+        } else if (typeof message.cachePath === "string") {
+          setCacheFolder(message.cachePath);
+        }
+        if (message.projectName === null) {
+          projectNameParam.setFromPlugin(null);
+        } else if (typeof message.projectName === "string") {
+          projectNameParam.setFromPlugin(message.projectName);
+        }
+        if (message.projectSampleRate === null) {
+          projectSampleRateParam.setFromPlugin(null);
+        } else if (typeof message.projectSampleRate === "number") {
+          projectSampleRateParam.setFromPlugin(
+            Math.round(message.projectSampleRate),
+          );
+        }
+        if (message.resamplePointsInput === null) {
+          resamplePointsInputParam.setFromPlugin(null);
+        } else if (typeof message.resamplePointsInput === "number") {
+          resamplePointsInputParam.setFromPlugin(message.resamplePointsInput);
+        }
+        if (message.resamplePointsPitch === null) {
+          resamplePointsPitchParam.setFromPlugin(null);
+        } else if (typeof message.resamplePointsPitch === "number") {
+          resamplePointsPitchParam.setFromPlugin(message.resamplePointsPitch);
+        }
+        if (message.gain === null) {
+          gainParam.setFromPlugin(null);
+        } else if (typeof message.gain === "number") {
+          gainParam.setFromPlugin(clamp(message.gain, -24, 24));
+        }
+        setStatus(nextStatus);
+      }
+
+      if (message.type === "ProjectFolderError") {
+        setFolderError(message.message);
+        setStatus("Project folder error");
+      }
+
+      if (message.type === "ProjectFolderCanceled") {
+        setStatus("Folder picker canceled");
+      }
+
+      if (message.type === "SampleSaved") {
+        setSampleError(null);
+        setStatus(`Sample cached${message.name ? `: ${message.name}` : ""}`);
+      }
+
+      if (message.type === "SampleSaveError") {
+        setSampleError(message.message);
+        setStatus("Sample save error");
+      }
+
+      if (message.type === "CachedSample") {
+        if (audioBufferRef.current) return;
+
+        try {
+          const interleaved = base64ToFloat32Array(message.data_base64);
+          const expectedLength = message.frames * message.channels;
+          if (interleaved.length !== expectedLength) {
+            throw new Error(
+              `Sample cache size mismatch (expected ${expectedLength} frames, got ${interleaved.length}).`,
+            );
+          }
+
+          const ctx = getAudioContext();
+          const audioBuffer = ctx.createBuffer(
+            message.channels,
+            message.frames,
+            message.sample_rate,
+          );
+          for (let ch = 0; ch < message.channels; ch += 1) {
+            const channelData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < message.frames; i += 1) {
+              channelData[i] = interleaved[i * message.channels + ch];
+            }
+          }
+          audioBufferRef.current = audioBuffer;
+
+          setSampleInfo({
+            name: message.name ?? "Cached sample",
+            sampleRate: message.sample_rate,
+            channels: message.channels,
+            frames: message.frames,
+            duration: message.frames / message.sample_rate,
+          });
+          setSampleError(null);
+          setStatus(
+            `Sample loaded from cache${message.name ? `: ${message.name}` : ""}`,
+          );
+        } catch (err) {
+          const errorMessage =
+            err instanceof Error
+              ? err.message
+              : "Failed to load cached sample.";
+          setSampleError(errorMessage);
+          setStatus("Cached sample load error");
+        }
+      }
+
+      if (message.type === "CachedSampleError") {
+        setSampleError(message.message);
+        setStatus("Cached sample error");
+      }
+
+      if (message.type === "ResampleStarted") {
+        if (resampleTimeoutRef.current) {
+          window.clearTimeout(resampleTimeoutRef.current);
+          resampleTimeoutRef.current = null;
+        }
+        setResampleFading(false);
+        setResampleModal({
+          label: message.label,
+          progress: message.progress ?? 0,
+          status: "working",
+        });
+      }
+
+      if (message.type === "ResampleProgress") {
+        setResampleModal((prev) => {
+          if (!prev) {
+            return {
+              label: "Resampling...",
+              progress: message.progress,
+              status: "working",
+            };
+          }
+          return {
+            ...prev,
+            progress: message.progress,
+            status: "working",
+          };
+        });
+      }
+
+      if (message.type === "ResampleComplete") {
+        setResampleModal((prev) => ({
+          label: prev?.label ?? "Resample complete",
+          progress: 1,
+          status: "done",
+          message: message.message ?? undefined,
+        }));
+        setResampleFading(true);
+        resampleTimeoutRef.current = window.setTimeout(() => {
+          setResampleModal(null);
+          setResampleFading(false);
+          resampleTimeoutRef.current = null;
+        }, 800);
+      }
+
+      if (message.type === "ResampleError") {
+        setResampleModal({
+          label: "Resample failed",
+          progress: 1,
+          status: "error",
+          message: message.message,
+        });
+        setResampleFading(false);
+        resampleTimeoutRef.current = window.setTimeout(() => {
+          setResampleModal(null);
+          resampleTimeoutRef.current = null;
+        }, 1600);
+      }
+    };
+
+    sendToPluginSafe({ type: "Init" });
+
+    return () => {
+      if (window.onPluginMessage) {
+        window.onPluginMessage = undefined;
+      }
+      if (resampleTimeoutRef.current) {
+        window.clearTimeout(resampleTimeoutRef.current);
+        resampleTimeoutRef.current = null;
+      }
+    };
+  }, [
+    audioBufferRef,
+    gainParam,
+    getAudioContext,
+    pluginVersionParam,
+    projectFolderParam,
+    projectNameParam,
+    projectSampleRateParam,
+    resamplePointsInputParam,
+    resamplePointsPitchParam,
+    setCacheFolder,
+    setFolderError,
+    setResampleFading,
+    setResampleModal,
+    setSampleError,
+    setSampleInfo,
+    setStatus,
+  ]);
+};
