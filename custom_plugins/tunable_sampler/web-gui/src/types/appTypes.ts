@@ -8,6 +8,8 @@ export type PluginMessage =
       projectSampleRate?: number | null;
       resamplePointsInput?: number | null;
       resamplePointsPitch?: number | null;
+      sampleStart?: number | null;
+      sampleEnd?: number | null;
       gain?: number | null;
     }
   | {

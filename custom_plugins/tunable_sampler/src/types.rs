@@ -9,6 +9,8 @@ pub enum Action {
     PickProjectFolder,
     SetProjectFolder { path: String },
     SetGain { value: f32 },
+    SetSampleStart { value: f32 },
+    SetSampleEnd { value: f32 },
     SetResamplePointsInput { points: u32 },
     SetResamplePointsPitch { points: u32 },
     SaveSample {

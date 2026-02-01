@@ -3299,7 +3299,7 @@ dependencies = [
 
 [[package]]
 name = "tunable_sampler"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "base64 0.22.1",
  "nih_plug",

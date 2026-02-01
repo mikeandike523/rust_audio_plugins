@@ -24,6 +24,8 @@ type UsePluginMessagesOptions = {
   projectNameParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
+  sampleStartParam: InitializedParam<number>;
+  sampleEndParam: InitializedParam<number>;
   resamplePointsInputParam: InitializedParam<number>;
   resamplePointsPitchParam: InitializedParam<number>;
   setStatus: Dispatch<SetStateAction<string>>;
@@ -43,6 +45,8 @@ export const usePluginMessages = ({
   projectNameParam,
   projectSampleRateParam,
   gainParam,
+  sampleStartParam,
+  sampleEndParam,
   resamplePointsInputParam,
   resamplePointsPitchParam,
   setStatus,
@@ -98,6 +102,16 @@ export const usePluginMessages = ({
           resamplePointsPitchParam.setFromPlugin(null);
         } else if (typeof message.resamplePointsPitch === "number") {
           resamplePointsPitchParam.setFromPlugin(message.resamplePointsPitch);
+        }
+        if (message.sampleStart === null) {
+          sampleStartParam.setFromPlugin(null);
+        } else if (typeof message.sampleStart === "number") {
+          sampleStartParam.setFromPlugin(clamp(message.sampleStart, 0, 1));
+        }
+        if (message.sampleEnd === null) {
+          sampleEndParam.setFromPlugin(null);
+        } else if (typeof message.sampleEnd === "number") {
+          sampleEndParam.setFromPlugin(clamp(message.sampleEnd, 0, 1));
         }
         if (message.gain === null) {
           gainParam.setFromPlugin(null);
@@ -252,6 +266,8 @@ export const usePluginMessages = ({
   }, [
     audioBufferRef,
     gainParam,
+    sampleStartParam,
+    sampleEndParam,
     getAudioContext,
     pluginVersionParam,
     projectFolderParam,

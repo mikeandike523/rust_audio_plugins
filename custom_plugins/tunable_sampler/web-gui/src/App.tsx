@@ -64,6 +64,22 @@ export default function App() {
     pollMs: null,
   });
 
+  const sampleStartParam = useInitializedParam<number>({
+    name: "sampleStart",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: (value) => ({ type: "SetSampleStart", value }),
+    pollMs: null,
+  });
+
+  const sampleEndParam = useInitializedParam<number>({
+    name: "sampleEnd",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: (value) => ({ type: "SetSampleEnd", value }),
+    pollMs: null,
+  });
+
   const resamplePointsInputParam = useInitializedParam<number>({
     name: "resamplePointsInput",
     initialValue: RESAMPLE_OPTIONS[2],
@@ -95,6 +111,8 @@ export default function App() {
     projectNameParam,
     projectSampleRateParam,
     gainParam,
+    sampleStartParam,
+    sampleEndParam,
     resamplePointsInputParam,
     resamplePointsPitchParam,
     setStatus,
@@ -114,6 +132,8 @@ export default function App() {
     projectNameParam.ready &&
     projectSampleRateParam.ready &&
     gainParam.ready &&
+    sampleStartParam.ready &&
+    sampleEndParam.ready &&
     resamplePointsInputParam.ready &&
     resamplePointsPitchParam.ready;
 
@@ -159,6 +179,20 @@ export default function App() {
     gainParam.setValue(clamped);
   };
 
+  const handleSampleStartChange = useCallback(
+    (value: number) => {
+      sampleStartParam.setValue(clamp(value, 0, 1));
+    },
+    [sampleStartParam],
+  );
+
+  const handleSampleEndChange = useCallback(
+    (value: number) => {
+      sampleEndParam.setValue(clamp(value, 0, 1));
+    },
+    [sampleEndParam],
+  );
+
   const handleResamplePointsInputChange = (value: number) => {
     if (!Number.isNaN(value)) {
       resamplePointsInputParam.setValue(value);
@@ -179,6 +213,16 @@ export default function App() {
     setSampleError(message);
     setStatus(statusText);
   };
+
+  useEffect(() => {
+    if (!sampleInfo) {
+      sampleStartParam.setValue(0);
+      sampleEndParam.setValue(0);
+      return;
+    }
+    sampleStartParam.setValue(0);
+    sampleEndParam.setValue(1);
+  }, [sampleEndParam, sampleInfo, sampleStartParam]);
 
   return (
     <div className="panel">
@@ -206,6 +250,10 @@ export default function App() {
           isDecoding={isDecoding}
           onFileSelected={handleFileSelected}
           onFileRejected={handleFileRejected}
+          sampleStart={sampleStartParam.value}
+          sampleEnd={sampleEndParam.value}
+          onSampleStartChange={handleSampleStartChange}
+          onSampleEndChange={handleSampleEndChange}
           waveformContainerRef={waveformContainerRef}
           waveformCanvasRef={waveformCanvasRef}
         />

@@ -77,6 +77,8 @@ impl TunableSampler {
             "cachePath": cache_folder,
             "projectName": project_name,
             "gain": params.gain.value(),
+            "sampleStart": params.sample_start.value(),
+            "sampleEnd": params.sample_end.value(),
             "projectSampleRate": sample_rate_hz.load(Ordering::Relaxed),
             "resamplePointsInput": resample_points_input.load(Ordering::Relaxed),
             "resamplePointsPitch": resample_points_pitch.load(Ordering::Relaxed),
@@ -270,6 +272,18 @@ impl Plugin for TunableSampler {
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
                             }
+                            Action::SetSampleStart { value } => {
+                                let clamped = value.clamp(0.0, 1.0);
+                                setter.begin_set_parameter(&params.sample_start);
+                                setter.set_parameter(&params.sample_start, clamped);
+                                setter.end_set_parameter(&params.sample_start);
+                            }
+                            Action::SetSampleEnd { value } => {
+                                let clamped = value.clamp(0.0, 1.0);
+                                setter.begin_set_parameter(&params.sample_end);
+                                setter.set_parameter(&params.sample_end, clamped);
+                                setter.end_set_parameter(&params.sample_end);
+                            }
                             Action::SetResamplePointsInput { points } => {
                                 resample_points_input.store(points, Ordering::Relaxed);
                                 resample_requested.store(true, Ordering::Relaxed);
@@ -389,6 +403,20 @@ impl Plugin for TunableSampler {
                     ctx.send_json(json!({
                         "type": "State",
                         "gain": params.gain.value(),
+                    }));
+                }
+
+                if params.sample_start_changed.swap(false, Ordering::Relaxed) {
+                    ctx.send_json(json!({
+                        "type": "State",
+                        "sampleStart": params.sample_start.value(),
+                    }));
+                }
+
+                if params.sample_end_changed.swap(false, Ordering::Relaxed) {
+                    ctx.send_json(json!({
+                        "type": "State",
+                        "sampleEnd": params.sample_end.value(),
                     }));
                 }
 
