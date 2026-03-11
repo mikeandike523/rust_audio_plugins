@@ -23,6 +23,9 @@
 
     "check-version": "bash __inenv python scripts/check_version.py",
     "set-version": "bash __inenv python scripts/set_version.py",
+    "open_spatial:rust:bundle-dev":"bash scripts/package-json/open_spatial/rust/bundle-dev.sh",
+    "open_spatial:rust:bundle-release":"bash scripts/package-json/open_spatial/rust/bundle-release.sh",
+
     "bootstrap-new-project": "bash __inenv python scripts/package-json/bootstrap_new_project.py",
     "start-log-server": "node scripts/log-server.js"
   },
