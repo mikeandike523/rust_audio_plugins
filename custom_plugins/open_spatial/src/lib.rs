@@ -434,7 +434,7 @@ impl HrtfEngine {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum OpenSpatialTask {
+pub enum OpenSpatialTask {
     EnsureHrtfCache,
 }
 
