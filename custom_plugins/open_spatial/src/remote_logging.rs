@@ -21,11 +21,15 @@ impl RemoteLogger {
     }
 
     pub fn log<T: Serialize>(&self, entry: &T) {
+        let Ok(body) = serde_json::to_string(entry) else {
+            return;
+        };
+
         let _ = self
             .agent
             .post(&self.url)
             .set("Content-Type", "application/json")
-            .send_json(entry);
+            .send_string(&body);
     }
 
     pub fn log_step(&self, step: &str, detail: impl Into<String>) {

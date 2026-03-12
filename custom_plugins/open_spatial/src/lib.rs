@@ -19,9 +19,10 @@ use std::sync::{Arc, Mutex};
 
 const GUI_WIDTH: u32 = 1080;
 const GUI_HEIGHT: u32 = 760;
-const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
-const GUI_DEV_SERVER_ROUTE: &str = "/open-spatial";
-const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/open-spatial";
+const GUI_DEV_SERVER_PROBE_URLS: [&str; 2] = [
+    "http://localhost:5173/open-spatial",
+    "http://localhost:4173/open-spatial",
+];
 const GUI_PUBLISHED_URL: &str = "https://open-spatial-web-gui.vercel.app";
 const METER_UPDATE_SECONDS: f32 = 0.1;
 const ANALYTIC_RENDERER_ID: &str = "sofa-runtime-fetch-v1";
@@ -559,18 +560,20 @@ impl OpenSpatial {
                     .build(),
             );
 
-            client.get(GUI_DEV_SERVER_PROBE_URL).call()
+            for url in GUI_DEV_SERVER_PROBE_URLS {
+                if let Ok(response) = client.get(url).call() {
+                    let content_type = response.header("Content-Type").unwrap_or("");
+                    if content_type.starts_with("text/") {
+                        return Some(url);
+                    }
+                }
+            }
+
+            None
         })
         .join()
         {
-            Ok(Ok(response)) => {
-                let content_type = response.header("Content-Type").unwrap_or("");
-                if content_type.starts_with("text/") {
-                    GUI_DEV_SERVER_PROBE_URL
-                } else {
-                    GUI_PUBLISHED_URL
-                }
-            }
+            Ok(Some(url)) => url,
             _ => GUI_PUBLISHED_URL,
         }
     }
