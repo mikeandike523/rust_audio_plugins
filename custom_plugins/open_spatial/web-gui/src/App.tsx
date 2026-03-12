@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { debugLog } from "./debugLog";
 
 type CoordinateMode = "spherical" | "cylindrical";
 
@@ -37,13 +38,24 @@ type PluginMessage =
       output?: Partial<MeterValues>;
     };
 
+const isPluginMessage = (message: unknown): message is PluginMessage => {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+
+  const candidate = message as { type?: unknown };
+  return candidate.type === "State" || candidate.type === "Meter";
+};
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
 const sendToPluginSafe = (payload: unknown) => {
   if (typeof window.sendToPlugin === "function") {
+    debugLog("send_to_plugin", { payload });
     window.sendToPlugin(payload);
   } else {
+    debugLog("send_to_plugin_missing", { payload });
     console.info("sendToPlugin missing", payload);
   }
 };
@@ -131,12 +143,41 @@ export default function App() {
 
   useEffect(() => {
     if (didInit.current) {
+      debugLog("effect_skipped_duplicate_mount");
       return;
     }
     didInit.current = true;
+    debugLog("effect_mount", {
+      guiVersion,
+      loadedFrom,
+      hasSendToPlugin: typeof window.sendToPlugin === "function",
+    });
 
-    window.onPluginMessage = (message: PluginMessage) => {
+    window.onPluginMessage = (message: unknown) => {
+      if (!isPluginMessage(message)) {
+        debugLog("plugin_message_invalid", {
+          payloadType: typeof message,
+        });
+        return;
+      }
+
+      debugLog("plugin_message_received", {
+        messageType: message.type,
+        initStage: message.type === "State" ? message.initStage ?? null : null,
+        initMessage: message.type === "State" ? message.initMessage ?? null : null,
+        hrtfReady: message.type === "State" ? Boolean(message.hrtfReady) : null,
+      });
+
       if (message.type === "State") {
+        debugLog("plugin_state_applied", {
+          coordinateMode: message.coordinateMode ?? "spherical",
+          initStage: message.initStage ?? "idle",
+          initMessage: message.initMessage ?? "Waiting for initialization",
+          initProgress: message.initProgress ?? null,
+          cachePath: message.cachePath ?? "",
+          hrtfPath: message.hrtfPath ?? "",
+          hrtfReady: Boolean(message.hrtfReady),
+        });
         setCoordinateMode(message.coordinateMode ?? "spherical");
         setAzimuth(message.azimuth ?? 0);
         setElevation(message.elevation ?? 0);
@@ -173,13 +214,17 @@ export default function App() {
         });
       }
     };
+    debugLog("plugin_message_handler_registered");
 
+    debugLog("init_dispatch_begin");
     sendToPluginSafe({ type: "Init" });
+    debugLog("init_dispatch_end");
 
     return () => {
+      debugLog("effect_unmount");
       window.onPluginMessage = undefined;
     };
-  }, []);
+  }, [guiVersion, loadedFrom]);
 
   const displayDistance = coordinateMode === "spherical" ? distance : radius;
   const sourcePoint = useMemo(
@@ -479,7 +524,13 @@ export default function App() {
               <strong title={loadedFrom}>{loadedFrom}</strong>
             </div>
           </div>
-          <button className="validate-button" onClick={() => sendToPluginSafe({ type: "ValidateCache" })}>
+          <button
+            className="validate-button"
+            onClick={() => {
+              debugLog("validate_cache_click");
+              sendToPluginSafe({ type: "ValidateCache" });
+            }}
+          >
             Revalidate Cache
           </button>
         </div>

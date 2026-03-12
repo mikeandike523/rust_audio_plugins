@@ -1,6 +1,9 @@
+mod remote_logging;
+
 use nih_plug::params::enums::Enum;
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
+use remote_logging::RemoteLogger;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -411,13 +414,12 @@ impl HrtfEngine {
         }
 
         // libmysofa uses x = right, y = front, z = up. Our internal pose uses x = front, y = right.
-        self.sofa
-            .filter(
-                pose.position.y,
-                pose.position.x,
-                pose.position.z,
-                &mut self.filter,
-            );
+        self.sofa.filter(
+            pose.position.y,
+            pose.position.x,
+            pose.position.z,
+            &mut self.filter,
+        );
         self.renderer.set_filter(&self.filter);
         self.renderer
             .process_block(
@@ -440,6 +442,7 @@ pub enum OpenSpatialTask {
 
 pub struct OpenSpatial {
     params: Arc<OpenSpatialParams>,
+    remote_logger: RemoteLogger,
     sample_rate: f32,
     meter_interval_samples: usize,
     meter_samples_remaining: usize,
@@ -462,6 +465,7 @@ impl Default for OpenSpatial {
     fn default() -> Self {
         Self {
             params: Arc::new(OpenSpatialParams::default()),
+            remote_logger: RemoteLogger::new(9099),
             sample_rate: 44100.0,
             meter_interval_samples: 4410,
             meter_samples_remaining: 4410,
@@ -504,6 +508,10 @@ impl OpenSpatial {
             return;
         }
 
+        self.remote_logger.log_step(
+            "initialize.sample_rate_changed",
+            format!("sample_rate={sample_rate}"),
+        );
         self.sample_rate = sample_rate.max(1.0);
         self.hrtf_engine = None;
         let interval = (self.sample_rate * METER_UPDATE_SECONDS).round() as usize;
@@ -583,12 +591,23 @@ impl OpenSpatial {
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
+            self.remote_logger
+                .log_step("editor.queue_cache_task", "queued from editor");
             executor.execute_background(OpenSpatialTask::EnsureHrtfCache);
+        } else {
+            self.remote_logger.log_step(
+                "editor.queue_cache_task_skipped",
+                "task already running when editor tried to queue cache validation",
+            );
         }
     }
 
     fn try_load_hrtf_from_cache(&mut self) {
         if self.hrtf_engine.is_some() {
+            self.remote_logger.log_step(
+                "renderer.load_cache_skipped",
+                "renderer already initialized in memory",
+            );
             return;
         }
 
@@ -598,9 +617,17 @@ impl OpenSpatial {
             .map(|guard| guard.clone())
             .unwrap_or_default();
         if !snapshot.file_ready {
+            self.remote_logger.log_step(
+                "renderer.load_cache_waiting",
+                format!("file_ready=false stage={}", snapshot.stage),
+            );
             return;
         }
 
+        self.remote_logger.log_step(
+            "renderer.load_cache_begin",
+            format!("path={}", snapshot.hrtf_path),
+        );
         if let Ok(mut status) = self.runtime_status.lock() {
             status.stage = "loading".to_string();
             status.message = "Loading cached HRTF".to_string();
@@ -611,6 +638,13 @@ impl OpenSpatial {
         match HrtfEngine::load(Path::new(&snapshot.hrtf_path), self.sample_rate) {
             Ok(engine) => {
                 self.hrtf_engine = Some(engine);
+                self.remote_logger.log_step(
+                    "renderer.load_cache_success",
+                    format!(
+                        "path={} sample_rate={}",
+                        snapshot.hrtf_path, self.sample_rate
+                    ),
+                );
                 if let Ok(mut status) = self.runtime_status.lock() {
                     status.stage = "ready".to_string();
                     status.message = "Measured HRTF ready".to_string();
@@ -620,6 +654,10 @@ impl OpenSpatial {
                 }
             }
             Err(err) => {
+                self.remote_logger.log_step(
+                    "renderer.load_cache_error",
+                    format!("path={} error={err}", snapshot.hrtf_path),
+                );
                 if let Ok(mut status) = self.runtime_status.lock() {
                     status.stage = "error".to_string();
                     status.message = err;
@@ -655,14 +693,20 @@ impl Plugin for OpenSpatial {
         let runtime_status = self.runtime_status.clone();
         let runtime_dirty = self.runtime_dirty.clone();
         let task_running = self.task_running.clone();
+        let remote_logger = self.remote_logger.clone();
 
         Box::new(move |task| {
+            remote_logger.log_step("task_executor.received", format!("task={task:?}"));
             match task {
-                OpenSpatialTask::EnsureHrtfCache => {
-                    ensure_hrtf_cache_task(&asset_cache_dir, &runtime_status, &runtime_dirty)
-                }
+                OpenSpatialTask::EnsureHrtfCache => ensure_hrtf_cache_task(
+                    &asset_cache_dir,
+                    &runtime_status,
+                    &runtime_dirty,
+                    &remote_logger,
+                ),
             }
             task_running.store(false, Ordering::Relaxed);
+            remote_logger.log_step("task_executor.completed", format!("task={task:?}"));
         })
     }
 
@@ -676,7 +720,13 @@ impl Plugin for OpenSpatial {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        self.remote_logger.log_step(
+            "initialize.begin",
+            format!("sample_rate={}", buffer_config.sample_rate),
+        );
         self.update_sample_rate(buffer_config.sample_rate);
+        self.remote_logger
+            .log_step("initialize.end", "plugin initialize completed");
         true
     }
 
@@ -811,6 +861,8 @@ impl Plugin for OpenSpatial {
     }
 
     fn editor(&mut self, async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        self.remote_logger
+            .log_step("editor.begin", "building webview editor");
         self.try_load_hrtf_from_cache();
 
         let params = self.params.clone();
@@ -823,6 +875,7 @@ impl Plugin for OpenSpatial {
         let runtime_status = self.runtime_status.clone();
         let runtime_dirty = self.runtime_dirty.clone();
         let task_running = self.task_running.clone();
+        let remote_logger = self.remote_logger.clone();
 
         if !runtime_status
             .lock()
@@ -830,21 +883,36 @@ impl Plugin for OpenSpatial {
             .unwrap_or(false)
             && !task_running.load(Ordering::Relaxed)
         {
+            self.remote_logger.log_step(
+                "editor.cache_status_missing",
+                "cache not ready when editor opened; queueing background task",
+            );
             self.maybe_queue_cache_task_from_editor(&async_executor);
         }
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
+        self.remote_logger
+            .log_step("editor.webview_source", "resolved GUI source URL");
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
+                    remote_logger.log_step("editor.event_raw", value.to_string());
                     if let Ok(action) = serde_json::from_value::<Action>(value) {
                         match action {
                             Action::Init => {
+                                remote_logger.log_step(
+                                    "editor.action_init",
+                                    "frontend requested initial state snapshot",
+                                );
                                 send_state_message(ctx, &params, &runtime_status);
                             }
                             Action::SetCoordinateMode { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_coordinate_mode",
+                                    format!("value={value}"),
+                                );
                                 setter.begin_set_parameter(&params.coordinate_mode);
                                 setter.set_parameter(
                                     &params.coordinate_mode,
@@ -853,30 +921,62 @@ impl Plugin for OpenSpatial {
                                 setter.end_set_parameter(&params.coordinate_mode);
                             }
                             Action::SetAzimuth { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_azimuth",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.azimuth, value);
                             }
                             Action::SetElevation { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_elevation",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.elevation, value);
                             }
                             Action::SetDistance { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_distance",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.distance, value);
                             }
                             Action::SetRadius { value } => {
+                                remote_logger
+                                    .log_step("editor.action_set_radius", format!("value={value}"));
                                 set_float_parameter(&setter, &params.radius, value);
                             }
                             Action::SetHeight { value } => {
+                                remote_logger
+                                    .log_step("editor.action_set_height", format!("value={value}"));
                                 set_float_parameter(&setter, &params.height, value);
                             }
                             Action::SetSourceYaw { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_source_yaw",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.source_yaw, value);
                             }
                             Action::SetDirectivity { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_directivity",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.directivity, value);
                             }
                             Action::SetOutputGain { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_output_gain",
+                                    format!("value={value}"),
+                                );
                                 set_float_parameter(&setter, &params.output_gain, value);
                             }
                             Action::ValidateCache => {
+                                remote_logger.log_step(
+                                    "editor.action_validate_cache",
+                                    "frontend requested cache validation",
+                                );
                                 if task_running
                                     .compare_exchange(
                                         false,
@@ -886,19 +986,41 @@ impl Plugin for OpenSpatial {
                                     )
                                     .is_ok()
                                 {
+                                    remote_logger.log_step(
+                                        "editor.validate_cache_queued",
+                                        "background cache task queued from ValidateCache",
+                                    );
                                     async_executor
                                         .execute_background(OpenSpatialTask::EnsureHrtfCache);
+                                } else {
+                                    remote_logger.log_step(
+                                        "editor.validate_cache_skipped",
+                                        "ValidateCache ignored because task already running",
+                                    );
                                 }
                             }
                         }
+                    } else {
+                        remote_logger.log_step(
+                            "editor.event_parse_failed",
+                            "received event payload that did not deserialize as Action",
+                        );
                     }
                 }
 
                 if params_dirty.swap(false, Ordering::Relaxed) {
+                    remote_logger.log_step(
+                        "editor.params_dirty",
+                        "sending updated parameter state to frontend",
+                    );
                     send_state_message(ctx, &params, &runtime_status);
                 }
 
                 if runtime_dirty.swap(false, Ordering::Relaxed) {
+                    remote_logger.log_step(
+                        "editor.runtime_dirty",
+                        "sending updated runtime status to frontend",
+                    );
                     send_state_message(ctx, &params, &runtime_status);
                 }
 
@@ -949,6 +1071,7 @@ fn ensure_hrtf_cache_task(
     asset_cache_dir: &Arc<Mutex<String>>,
     runtime_status: &Arc<Mutex<RuntimeInitStatus>>,
     runtime_dirty: &Arc<AtomicBool>,
+    remote_logger: &RemoteLogger,
 ) {
     let cache_root = asset_cache_dir
         .lock()
@@ -968,9 +1091,19 @@ fn ensure_hrtf_cache_task(
     let hrtf_path = cache_root.join(HRTF_FILENAME);
     let manifest_path = cache_root.join(ASSET_MANIFEST_FILE);
 
+    remote_logger.log_step(
+        "cache_task.begin",
+        format!(
+            "cache_root={} hrtf_path={} manifest_path={}",
+            cache_root.display(),
+            hrtf_path.display(),
+            manifest_path.display()
+        ),
+    );
     set_runtime_status(
         runtime_status,
         runtime_dirty,
+        remote_logger,
         RuntimeInitStatus {
             stage: "validating".to_string(),
             message: "Validating runtime HRTF cache".to_string(),
@@ -1000,6 +1133,10 @@ fn ensure_hrtf_cache_task(
                     .map_err(|err| format!("Failed to stat cached HRTF: {err}"))?
                     .len();
                 if file_hash == manifest.sha256_hex && file_bytes == manifest.bytes {
+                    remote_logger.log_step(
+                        "cache_task.cache_hit",
+                        format!("bytes={file_bytes} sha256={file_hash}"),
+                    );
                     return Ok(RuntimeInitStatus {
                         stage: "cached".to_string(),
                         message: "Cached HRTF is valid, waiting for renderer load".to_string(),
@@ -1017,6 +1154,7 @@ fn ensure_hrtf_cache_task(
         }
 
         let temp_path = cache_root.join(format!("{HRTF_FILENAME}.download"));
+        remote_logger.log_step("cache_task.download_begin", format!("url={HRTF_URL}"));
         let response = ureq::get(HRTF_URL)
             .call()
             .map_err(|err| format!("Failed to download HRTF: {err}"))?;
@@ -1046,6 +1184,7 @@ fn ensure_hrtf_cache_task(
             set_runtime_status(
                 runtime_status,
                 runtime_dirty,
+                remote_logger,
                 RuntimeInitStatus {
                     stage: "downloading".to_string(),
                     message: "Downloading HRTF asset".to_string(),
@@ -1067,6 +1206,10 @@ fn ensure_hrtf_cache_task(
             .map_err(|err| format!("Failed to move cached HRTF into place: {err}"))?;
 
         let sha256_hex = hex_encode(&hasher.finalize());
+        remote_logger.log_step(
+            "cache_task.download_complete",
+            format!("bytes={downloaded} sha256={sha256_hex}"),
+        );
         let manifest = AssetManifest {
             schema_version: 1,
             renderer_id: ANALYTIC_RENDERER_ID.to_string(),
@@ -1095,31 +1238,49 @@ fn ensure_hrtf_cache_task(
     })();
 
     match task_result {
-        Ok(status) => set_runtime_status(runtime_status, runtime_dirty, status),
-        Err(err) => set_runtime_status(
-            runtime_status,
-            runtime_dirty,
-            RuntimeInitStatus {
-                stage: "error".to_string(),
-                message: err,
-                progress: None,
-                downloaded_bytes: None,
-                total_bytes: None,
-                cache_path: cache_root.to_string_lossy().to_string(),
-                hrtf_path: hrtf_path.to_string_lossy().to_string(),
-                hrtf_url: HRTF_URL.to_string(),
-                ready: false,
-                file_ready: false,
-            },
-        ),
+        Ok(status) => {
+            remote_logger.log_step(
+                "cache_task.success",
+                format!("stage={} file_ready={}", status.stage, status.file_ready),
+            );
+            set_runtime_status(runtime_status, runtime_dirty, remote_logger, status)
+        }
+        Err(err) => {
+            remote_logger.log_step("cache_task.error", err.clone());
+            set_runtime_status(
+                runtime_status,
+                runtime_dirty,
+                remote_logger,
+                RuntimeInitStatus {
+                    stage: "error".to_string(),
+                    message: err,
+                    progress: None,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    cache_path: cache_root.to_string_lossy().to_string(),
+                    hrtf_path: hrtf_path.to_string_lossy().to_string(),
+                    hrtf_url: HRTF_URL.to_string(),
+                    ready: false,
+                    file_ready: false,
+                },
+            )
+        }
     }
 }
 
 fn set_runtime_status(
     runtime_status: &Arc<Mutex<RuntimeInitStatus>>,
     runtime_dirty: &Arc<AtomicBool>,
+    remote_logger: &RemoteLogger,
     status: RuntimeInitStatus,
 ) {
+    remote_logger.log_step(
+        "runtime_status.set",
+        format!(
+            "stage={} message={} ready={} file_ready={} progress={:?}",
+            status.stage, status.message, status.ready, status.file_ready, status.progress
+        ),
+    );
     if let Ok(mut guard) = runtime_status.lock() {
         *guard = status;
     }
