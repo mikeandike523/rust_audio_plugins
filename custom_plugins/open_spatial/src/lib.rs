@@ -417,8 +417,7 @@ impl HrtfEngine {
                 pose.position.x,
                 pose.position.z,
                 &mut self.filter,
-            )
-            .map_err(|err| format!("Failed to interpolate HRTF filter: {err}"))?;
+            );
         self.renderer.set_filter(&self.filter);
         self.renderer
             .process_block(
