@@ -1,6 +1,5 @@
 mod remote_logging;
 
-use nih_plug::params::enums::Enum;
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use remote_logging::RemoteLogger;
@@ -32,32 +31,6 @@ const HRTF_URL: &str = "https://zenodo.org/records/3928297/files/HRIR_L2354.sofa
 const HRTF_FILENAME: &str = "HRIR_L2354.sofa";
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 const HRTF_PARTITION_LEN: usize = 64;
-
-#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
-enum CoordinateMode {
-    #[id = "spherical"]
-    #[name = "Spherical"]
-    Spherical,
-    #[id = "cylindrical"]
-    #[name = "Cylindrical"]
-    Cylindrical,
-}
-
-impl CoordinateMode {
-    fn from_id(value: &str) -> Self {
-        match value {
-            "cylindrical" => Self::Cylindrical,
-            _ => Self::Spherical,
-        }
-    }
-
-    fn id(self) -> &'static str {
-        match self {
-            Self::Spherical => "spherical",
-            Self::Cylindrical => "cylindrical",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AssetManifest {
@@ -102,20 +75,16 @@ impl Default for RuntimeInitStatus {
 
 #[derive(Params)]
 struct OpenSpatialParams {
-    #[id = "coord"]
-    coordinate_mode: EnumParam<CoordinateMode>,
     #[id = "azimth"]
     azimuth: FloatParam,
     #[id = "elevtn"]
     elevation: FloatParam,
     #[id = "distnc"]
     distance: FloatParam,
-    #[id = "radius"]
-    radius: FloatParam,
-    #[id = "height"]
-    height: FloatParam,
     #[id = "srcyaw"]
     source_yaw: FloatParam,
+    #[id = "towrds"]
+    always_towards_head: BoolParam,
     #[id = "direct"]
     directivity: FloatParam,
     #[id = "outgn"]
@@ -131,21 +100,15 @@ impl Default for OpenSpatialParams {
     fn default() -> Self {
         let params_dirty = Arc::new(AtomicBool::new(false));
 
-        let coordinate_dirty = params_dirty.clone();
         let azimuth_dirty = params_dirty.clone();
         let elevation_dirty = params_dirty.clone();
         let distance_dirty = params_dirty.clone();
-        let radius_dirty = params_dirty.clone();
-        let height_dirty = params_dirty.clone();
         let source_yaw_dirty = params_dirty.clone();
+        let always_towards_head_dirty = params_dirty.clone();
         let directivity_dirty = params_dirty.clone();
         let output_gain_dirty = params_dirty.clone();
 
         Self {
-            coordinate_mode: EnumParam::new("Coordinates", CoordinateMode::Spherical)
-                .with_callback(Arc::new(move |_| {
-                    coordinate_dirty.store(true, Ordering::Relaxed);
-                })),
             azimuth: FloatParam::new(
                 "Azimuth",
                 30.0,
@@ -189,38 +152,9 @@ impl Default for OpenSpatialParams {
             .with_callback(Arc::new(move |_| {
                 distance_dirty.store(true, Ordering::Relaxed);
             })),
-            radius: FloatParam::new(
-                "Radius",
-                1.5,
-                FloatRange::Skewed {
-                    min: 1.0,
-                    max: 30.0,
-                    factor: FloatRange::skew_factor(3.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_step_size(0.01)
-            .with_unit(" m")
-            .with_callback(Arc::new(move |_| {
-                radius_dirty.store(true, Ordering::Relaxed);
-            })),
-            height: FloatParam::new(
-                "Height",
-                0.0,
-                FloatRange::Linear {
-                    min: -10.0,
-                    max: 10.0,
-                },
-            )
-            .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_step_size(0.01)
-            .with_unit(" m")
-            .with_callback(Arc::new(move |_| {
-                height_dirty.store(true, Ordering::Relaxed);
-            })),
             source_yaw: FloatParam::new(
                 "Source Yaw",
-                180.0,
+                0.0,
                 FloatRange::Linear {
                     min: -180.0,
                     max: 180.0,
@@ -232,6 +166,11 @@ impl Default for OpenSpatialParams {
             .with_callback(Arc::new(move |_| {
                 source_yaw_dirty.store(true, Ordering::Relaxed);
             })),
+            always_towards_head: BoolParam::new("Always Towards Head", true).with_callback(
+                Arc::new(move |_| {
+                    always_towards_head_dirty.store(true, Ordering::Relaxed);
+                }),
+            ),
             directivity: FloatParam::new(
                 "Directivity",
                 0.65,
@@ -295,42 +234,18 @@ struct SpatialPose {
 }
 
 impl SpatialPose {
-    fn from_params(
-        coordinate_mode: CoordinateMode,
-        azimuth_deg: f32,
-        elevation_deg: f32,
-        distance_m: f32,
-        radius_m: f32,
-        height_m: f32,
-    ) -> Self {
+    fn from_params(azimuth_deg: f32, elevation_deg: f32, distance_m: f32) -> Self {
         let azimuth_rad = azimuth_deg.to_radians();
-
-        match coordinate_mode {
-            CoordinateMode::Spherical => {
-                let elevation_rad = elevation_deg.to_radians();
-                let distance = distance_m.max(1.0);
-                let horizontal = distance * elevation_rad.cos();
-                Self {
-                    position: Vec3 {
-                        x: horizontal * azimuth_rad.cos(),
-                        y: horizontal * azimuth_rad.sin(),
-                        z: distance * elevation_rad.sin(),
-                    },
-                    distance_m: distance,
-                }
-            }
-            CoordinateMode::Cylindrical => {
-                let radius = radius_m.max(1.0);
-                let position = Vec3 {
-                    x: radius * azimuth_rad.cos(),
-                    y: radius * azimuth_rad.sin(),
-                    z: height_m,
-                };
-                Self {
-                    position,
-                    distance_m: position.norm().max(1.0),
-                }
-            }
+        let elevation_rad = elevation_deg.to_radians();
+        let distance = distance_m.max(1.0);
+        let horizontal = distance * elevation_rad.cos();
+        Self {
+            position: Vec3 {
+                x: horizontal * azimuth_rad.cos(),
+                y: horizontal * azimuth_rad.sin(),
+                z: distance * elevation_rad.sin(),
+            },
+            distance_m: distance,
         }
     }
 }
@@ -381,6 +296,7 @@ impl HrtfEngine {
         mono_input: &[f32],
         pose: SpatialPose,
         source_yaw_deg: f32,
+        always_towards_head: bool,
         directivity_amount: f32,
         output_gain_db: f32,
         out_left: &mut [f32],
@@ -394,11 +310,28 @@ impl HrtfEngine {
             y: -direction.y,
             z: -direction.z,
         };
-        let source_yaw_rad = source_yaw_deg.to_radians();
-        let source_forward = Vec3 {
-            x: source_yaw_rad.cos(),
-            y: source_yaw_rad.sin(),
-            z: 0.0,
+        let source_forward = if always_towards_head {
+            let horizontal_to_listener = Vec3 {
+                x: to_listener.x,
+                y: to_listener.y,
+                z: 0.0,
+            };
+            if horizontal_to_listener.norm() > 1.0e-6 {
+                horizontal_to_listener.normalized()
+            } else {
+                Vec3 {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                }
+            }
+        } else {
+            let source_yaw_rad = source_yaw_deg.to_radians();
+            Vec3 {
+                x: source_yaw_rad.cos(),
+                y: source_yaw_rad.sin(),
+                z: 0.0,
+            }
         };
         let alignment = source_forward.dot(to_listener).clamp(-1.0, 1.0);
         let cardioid = 0.5 * (1.0 + alignment);
@@ -414,10 +347,11 @@ impl HrtfEngine {
             *dst = *src * input_gain;
         }
 
-        // libmysofa uses x = right, y = front, z = up. Our internal pose uses x = front, y = right.
+        // SOFA/libmysofa uses +X = front, +Y = listener-left, +Z = up.
+        // Our plugin/UI uses +X = front, +Y = listener-right, so the lateral axis must be flipped.
         self.sofa.filter(
-            pose.position.y,
             pose.position.x,
+            -pose.position.y,
             pose.position.z,
             &mut self.filter,
         );
@@ -491,13 +425,11 @@ impl Default for OpenSpatial {
 #[serde(tag = "type")]
 enum Action {
     Init,
-    SetCoordinateMode { value: String },
     SetAzimuth { value: f32 },
     SetElevation { value: f32 },
     SetDistance { value: f32 },
-    SetRadius { value: f32 },
-    SetHeight { value: f32 },
     SetSourceYaw { value: f32 },
+    SetAlwaysTowardsHead { value: bool },
     SetDirectivity { value: f32 },
     SetOutputGain { value: f32 },
     ValidateCache,
@@ -777,20 +709,17 @@ impl Plugin for OpenSpatial {
             self.meter_input_peak_r = self.meter_input_peak_r.max(right.abs());
         }
 
-        let coordinate_mode = self.params.coordinate_mode.value();
         let pose = SpatialPose::from_params(
-            coordinate_mode,
             self.params.azimuth.value(),
             self.params.elevation.value(),
             self.params.distance.value(),
-            self.params.radius.value(),
-            self.params.height.value(),
         );
 
         if let Some(engine) = self.hrtf_engine.as_mut() {
             let mut output_left = vec![0.0; sample_count];
             let mut output_right = vec![0.0; sample_count];
             let source_yaw = self.params.source_yaw.value();
+            let always_towards_head = self.params.always_towards_head.value();
             let directivity = self.params.directivity.value();
             let output_gain = self.params.output_gain.value();
 
@@ -798,6 +727,7 @@ impl Plugin for OpenSpatial {
                 &mono_input,
                 pose,
                 source_yaw,
+                always_towards_head,
                 directivity,
                 output_gain,
                 &mut output_left,
@@ -911,18 +841,6 @@ impl Plugin for OpenSpatial {
                                 );
                                 send_state_message(ctx, &params, &runtime_status);
                             }
-                            Action::SetCoordinateMode { value } => {
-                                remote_logger.log_step(
-                                    "editor.action_set_coordinate_mode",
-                                    format!("value={value}"),
-                                );
-                                setter.begin_set_parameter(&params.coordinate_mode);
-                                setter.set_parameter(
-                                    &params.coordinate_mode,
-                                    CoordinateMode::from_id(&value),
-                                );
-                                setter.end_set_parameter(&params.coordinate_mode);
-                            }
                             Action::SetAzimuth { value } => {
                                 remote_logger.log_step(
                                     "editor.action_set_azimuth",
@@ -944,22 +862,19 @@ impl Plugin for OpenSpatial {
                                 );
                                 set_float_parameter(&setter, &params.distance, value);
                             }
-                            Action::SetRadius { value } => {
-                                remote_logger
-                                    .log_step("editor.action_set_radius", format!("value={value}"));
-                                set_float_parameter(&setter, &params.radius, value);
-                            }
-                            Action::SetHeight { value } => {
-                                remote_logger
-                                    .log_step("editor.action_set_height", format!("value={value}"));
-                                set_float_parameter(&setter, &params.height, value);
-                            }
                             Action::SetSourceYaw { value } => {
                                 remote_logger.log_step(
                                     "editor.action_set_source_yaw",
                                     format!("value={value}"),
                                 );
                                 set_float_parameter(&setter, &params.source_yaw, value);
+                            }
+                            Action::SetAlwaysTowardsHead { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_always_towards_head",
+                                    format!("value={value}"),
+                                );
+                                set_bool_parameter(&setter, &params.always_towards_head, value);
                             }
                             Action::SetDirectivity { value } => {
                                 remote_logger.log_step(
@@ -1344,12 +1259,17 @@ fn set_float_parameter(setter: &ParamSetter<'_>, param: &FloatParam, value: f32)
     setter.end_set_parameter(param);
 }
 
+fn set_bool_parameter(setter: &ParamSetter<'_>, param: &BoolParam, value: bool) {
+    setter.begin_set_parameter(param);
+    setter.set_parameter(param, value);
+    setter.end_set_parameter(param);
+}
+
 fn send_state_message(
     ctx: &WindowHandler,
     params: &Arc<OpenSpatialParams>,
     runtime_status: &Arc<Mutex<RuntimeInitStatus>>,
 ) {
-    let mode = params.coordinate_mode.value();
     let runtime = runtime_status
         .lock()
         .map(|guard| guard.clone())
@@ -1357,13 +1277,11 @@ fn send_state_message(
 
     ctx.send_json(json!({
         "type": "State",
-        "coordinateMode": mode.id(),
         "azimuth": params.azimuth.value(),
         "elevation": params.elevation.value(),
         "distance": params.distance.value(),
-        "radius": params.radius.value(),
-        "height": params.height.value(),
         "sourceYaw": params.source_yaw.value(),
+        "alwaysTowardsHead": params.always_towards_head.value(),
         "directivity": params.directivity.value(),
         "outputGain": params.output_gain.value(),
         "pluginVersion": env!("CARGO_PKG_VERSION"),

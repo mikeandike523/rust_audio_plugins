@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { debugLog } from "./debugLog";
 
-type CoordinateMode = "spherical" | "cylindrical";
-
 type MeterValues = {
   l: number;
   r: number;
@@ -11,13 +9,11 @@ type MeterValues = {
 type PluginMessage =
   | {
       type: "State";
-      coordinateMode: CoordinateMode;
       azimuth?: number;
       elevation?: number;
       distance?: number;
-      radius?: number;
-      height?: number;
       sourceYaw?: number;
+      alwaysTowardsHead?: boolean;
       directivity?: number;
       outputGain?: number;
       pluginVersion?: string;
@@ -49,6 +45,19 @@ const isPluginMessage = (message: unknown): message is PluginMessage => {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+const normalizeAngle = (value: number) => {
+  let normalized = value % 360;
+  if (normalized > 180) {
+    normalized -= 360;
+  }
+  if (normalized <= -180) {
+    normalized += 360;
+  }
+  return normalized;
+};
+
+const getAutoSourceYaw = (azimuth: number) => normalizeAngle(azimuth + 180);
 
 const sendToPluginSafe = (payload: unknown) => {
   if (typeof window.sendToPlugin === "function") {
@@ -151,12 +160,29 @@ function ControlRow(props: {
   step: number;
   unit: string;
   digits?: number;
+  centerValue?: number;
+  disabled?: boolean;
+  hint?: string;
   onChange: (value: number) => void;
 }) {
-  const { label, value, min, max, step, unit, digits = 1, onChange } = props;
+  const {
+    label,
+    value,
+    min,
+    max,
+    step,
+    unit,
+    digits = 1,
+    centerValue,
+    disabled = false,
+    hint,
+    onChange,
+  } = props;
+  const centerPercent =
+    centerValue == null ? null : ((centerValue - min) / (max - min)) * 100;
 
   return (
-    <label className="control-row">
+    <label className={`control-row${disabled ? " is-disabled" : ""}`}>
       <div className="control-meta">
         <span>{label}</span>
         <strong>
@@ -164,26 +190,44 @@ function ControlRow(props: {
           {unit}
         </strong>
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
+      <div className="slider-shell">
+        {centerPercent != null ? (
+          <span className="slider-center-mark" style={{ left: `calc(${centerPercent}% - 1px)` }} />
+        ) : null}
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+          onDoubleClick={() => {
+            if (centerValue != null) {
+              onChange(centerValue);
+            }
+          }}
+        />
+      </div>
+      <div className="control-footer">
+        <span>{hint ?? (centerValue != null ? "Double-click to center" : "")}</span>
+        {centerValue != null ? (
+          <span>
+            Center {fmt(centerValue, digits)}
+            {unit}
+          </span>
+        ) : null}
+      </div>
     </label>
   );
 }
 
 export default function App() {
-  const [coordinateMode, setCoordinateMode] = useState<CoordinateMode>("spherical");
   const [azimuth, setAzimuth] = useState(30);
   const [elevation, setElevation] = useState(0);
   const [distance, setDistance] = useState(1.5);
-  const [radius, setRadius] = useState(1.5);
-  const [height, setHeight] = useState(0);
-  const [sourceYaw, setSourceYaw] = useState(180);
+  const [sourceYaw, setSourceYaw] = useState(0);
+  const [alwaysTowardsHead, setAlwaysTowardsHead] = useState(true);
   const [directivity, setDirectivity] = useState(0.65);
   const [outputGain, setOutputGain] = useState(-3);
   const [status, setStatus] = useState("Waiting for plugin...");
@@ -233,21 +277,19 @@ export default function App() {
 
       if (message.type === "State") {
         debugLog("plugin_state_applied", {
-          coordinateMode: message.coordinateMode ?? "spherical",
           initStage: message.initStage ?? "idle",
           initMessage: message.initMessage ?? "Waiting for initialization",
           initProgress: message.initProgress ?? null,
           cachePath: message.cachePath ?? "",
           hrtfPath: message.hrtfPath ?? "",
           hrtfReady: Boolean(message.hrtfReady),
+          alwaysTowardsHead: Boolean(message.alwaysTowardsHead ?? true),
         });
-        setCoordinateMode(message.coordinateMode ?? "spherical");
         setAzimuth(message.azimuth ?? 0);
         setElevation(message.elevation ?? 0);
         setDistance(message.distance ?? 1);
-        setRadius(message.radius ?? 1);
-        setHeight(message.height ?? 0);
-        setSourceYaw(message.sourceYaw ?? 180);
+        setSourceYaw(message.sourceYaw ?? 0);
+        setAlwaysTowardsHead(message.alwaysTowardsHead ?? true);
         setDirectivity(message.directivity ?? 0);
         setOutputGain(message.outputGain ?? 0);
         setPluginVersion(message.pluginVersion ?? null);
@@ -289,16 +331,13 @@ export default function App() {
     };
   }, [guiVersion, loadedFrom]);
 
-  const displayDistance = coordinateMode === "spherical" ? distance : radius;
+  const effectiveSourceYaw = alwaysTowardsHead ? getAutoSourceYaw(azimuth) : sourceYaw;
   const sourcePoint = useMemo(
-    () => polarToCartesianTopView(azimuth, clamp(displayDistance / 30, 0.1, 1) * 118),
-    [azimuth, displayDistance],
+    () => polarToCartesianTopView(azimuth, clamp(distance / 30, 0.1, 1) * 118),
+    [azimuth, distance],
   );
   const directivityLabel = `${Math.round(directivity * 100)}%`;
-  const visibleCoordinates =
-    coordinateMode === "spherical"
-      ? `az ${fmt(azimuth)} deg  |  el ${fmt(elevation)} deg  |  r ${fmt(distance, 2)} m`
-      : `az ${fmt(azimuth)} deg  |  radius ${fmt(radius, 2)} m  |  h ${fmt(height, 2)} m`;
+  const visibleCoordinates = `az ${fmt(azimuth)} deg  |  el ${fmt(elevation)} deg  |  r ${fmt(distance, 2)} m`;
   const progressPercent =
     typeof initProgress === "number" ? `${Math.round(initProgress * 100)}%` : "Pending";
   const downloadSizeLine =
@@ -339,12 +378,15 @@ export default function App() {
           <div className="section-label">Scene</div>
           <div className="stage-copy">
             <strong>{visibleCoordinates}</strong>
-            <span>Top view: front is up, positive azimuth is to the listener&apos;s right. Audio stays silent until the HRTF cache is ready.</span>
+            <span>
+              Top view: front is up, positive azimuth is to the listener&apos;s right. Audio stays
+              silent until the HRTF cache is ready.
+            </span>
           </div>
 
           <OrientationBadge
             azimuth={azimuth}
-            sourceYaw={sourceYaw}
+            sourceYaw={effectiveSourceYaw}
             directivity={directivity}
           />
 
@@ -389,7 +431,7 @@ export default function App() {
               <div
                 className="source-heading"
                 style={{
-                  transform: `translate(-12px, -52px) rotate(${sourceYaw}deg)`,
+                  transform: `translate(-12px, -52px) rotate(${effectiveSourceYaw}deg)`,
                   opacity: 0.35 + directivity * 0.65,
                 }}
               ></div>
@@ -403,8 +445,16 @@ export default function App() {
               <strong>{directivityLabel}</strong>
             </div>
             <div>
+              <span>Heading</span>
+              <strong>{alwaysTowardsHead ? "Auto" : "Manual"}</strong>
+            </div>
+            <div>
               <span>Output</span>
               <strong>{fmt(outputGain)} dB</strong>
+            </div>
+            <div>
+              <span>Yaw</span>
+              <strong>{fmt(effectiveSourceYaw)} deg</strong>
             </div>
           </div>
         </div>
@@ -412,19 +462,29 @@ export default function App() {
         <div className="controls-card">
           <div className="section-label">Controls</div>
 
-          <div className="mode-switch">
-            <button
-              className={coordinateMode === "spherical" ? "active" : ""}
-              onClick={() => sendToPluginSafe({ type: "SetCoordinateMode", value: "spherical" })}
-            >
-              Spherical
-            </button>
-            <button
-              className={coordinateMode === "cylindrical" ? "active" : ""}
-              onClick={() => sendToPluginSafe({ type: "SetCoordinateMode", value: "cylindrical" })}
-            >
-              Cylindrical
-            </button>
+          <div className="toggle-card">
+            <div>
+              <strong>Always Towards Head</strong>
+              <span>Automatically aim the source toward the listener.</span>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={alwaysTowardsHead}
+                onChange={(event) => {
+                  const value = event.target.checked;
+                  setAlwaysTowardsHead(value);
+                  sendToPluginSafe({ type: "SetAlwaysTowardsHead", value });
+                }}
+              />
+              <span className="switch-track">
+                <span className="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+
+          <div className="controls-note">
+            Angle sliders center on double-click. Neutral center is 0 degrees.
           </div>
 
           <div className="control-group">
@@ -435,70 +495,40 @@ export default function App() {
               max={180}
               step={0.1}
               unit=" deg"
+              centerValue={0}
               onChange={(value) => {
                 setAzimuth(value);
                 sendToPluginSafe({ type: "SetAzimuth", value });
               }}
             />
 
-            {coordinateMode === "spherical" ? (
-              <>
-                <ControlRow
-                  label="Elevation"
-                  value={elevation}
-                  min={-90}
-                  max={90}
-                  step={0.1}
-                  unit=" deg"
-                  onChange={(value) => {
-                    setElevation(value);
-                    sendToPluginSafe({ type: "SetElevation", value });
-                  }}
-                />
-                <ControlRow
-                  label="Distance"
-                  value={distance}
-                  min={1}
-                  max={30}
-                  step={0.01}
-                  unit=" m"
-                  digits={2}
-                  onChange={(value) => {
-                    setDistance(value);
-                    sendToPluginSafe({ type: "SetDistance", value });
-                  }}
-                />
-              </>
-            ) : (
-              <>
-                <ControlRow
-                  label="Radius"
-                  value={radius}
-                  min={1}
-                  max={30}
-                  step={0.01}
-                  unit=" m"
-                  digits={2}
-                  onChange={(value) => {
-                    setRadius(value);
-                    sendToPluginSafe({ type: "SetRadius", value });
-                  }}
-                />
-                <ControlRow
-                  label="Height"
-                  value={height}
-                  min={-10}
-                  max={10}
-                  step={0.01}
-                  unit=" m"
-                  digits={2}
-                  onChange={(value) => {
-                    setHeight(value);
-                    sendToPluginSafe({ type: "SetHeight", value });
-                  }}
-                />
-              </>
-            )}
+            <ControlRow
+              label="Elevation"
+              value={elevation}
+              min={-90}
+              max={90}
+              step={0.1}
+              unit=" deg"
+              centerValue={0}
+              onChange={(value) => {
+                setElevation(value);
+                sendToPluginSafe({ type: "SetElevation", value });
+              }}
+            />
+
+            <ControlRow
+              label="Distance"
+              value={distance}
+              min={1}
+              max={30}
+              step={0.01}
+              unit=" m"
+              digits={2}
+              onChange={(value) => {
+                setDistance(value);
+                sendToPluginSafe({ type: "SetDistance", value });
+              }}
+            />
 
             <ControlRow
               label="Source Yaw"
@@ -507,11 +537,19 @@ export default function App() {
               max={180}
               step={0.1}
               unit=" deg"
+              centerValue={0}
+              disabled={alwaysTowardsHead}
+              hint={
+                alwaysTowardsHead
+                  ? "Disabled while Always Towards Head is active"
+                  : "Double-click to center"
+              }
               onChange={(value) => {
                 setSourceYaw(value);
                 sendToPluginSafe({ type: "SetSourceYaw", value });
               }}
             />
+
             <ControlRow
               label="Directivity"
               value={directivity}
@@ -525,6 +563,7 @@ export default function App() {
                 sendToPluginSafe({ type: "SetDirectivity", value });
               }}
             />
+
             <ControlRow
               label="Output Gain"
               value={outputGain}
