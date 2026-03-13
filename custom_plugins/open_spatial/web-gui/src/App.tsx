@@ -62,13 +62,76 @@ const sendToPluginSafe = (payload: unknown) => {
 
 const fmt = (value: number, digits = 1) => value.toFixed(digits);
 
-const polarToCartesian = (azimuth: number, radius: number) => {
+const polarToCartesianTopView = (azimuth: number, radius: number) => {
   const radians = (azimuth * Math.PI) / 180;
   return {
-    x: Math.cos(radians) * radius,
-    y: Math.sin(radians) * radius,
+    x: Math.sin(radians) * radius,
+    y: -Math.cos(radians) * radius,
   };
 };
+
+function OrientationBadge(props: {
+  azimuth: number;
+  sourceYaw: number;
+  directivity: number;
+}) {
+  const { azimuth, sourceYaw, directivity } = props;
+  const center = 62;
+  const sourceOffset = polarToCartesianTopView(azimuth, 30);
+  const sourceX = center + sourceOffset.x;
+  const sourceY = center + sourceOffset.y;
+
+  return (
+    <div className="orientation-badge" aria-label="Top view orientation guide">
+      <svg viewBox="0 0 124 124" role="img" aria-hidden="true">
+        <circle className="orientation-ring" cx="62" cy="62" r="50" />
+        <line className="orientation-axis" x1="62" y1="12" x2="62" y2="112" />
+        <line className="orientation-axis" x1="12" y1="62" x2="112" y2="62" />
+        <line className="orientation-link" x1="62" y1="62" x2={sourceX} y2={sourceY} />
+
+        <g className="orientation-listener">
+          <circle cx="62" cy="62" r="15" />
+          <circle cx="48" cy="62" r="4" />
+          <circle cx="76" cy="62" r="4" />
+          <path d="M62 40 L56 52 L68 52 Z" />
+        </g>
+
+        <g className="orientation-source">
+          <circle cx={sourceX} cy={sourceY} r="7" />
+          <g
+            style={{ opacity: 0.35 + directivity * 0.65 }}
+            transform={`rotate(${sourceYaw} ${sourceX} ${sourceY})`}
+          >
+            <path
+              className="orientation-source-beam"
+              d={`
+                M ${sourceX - 8} ${sourceY - 5}
+                Q ${sourceX} ${sourceY - 22} ${sourceX + 8} ${sourceY - 5}
+                L ${sourceX + 4} ${sourceY - 3}
+                Q ${sourceX} ${sourceY - 12} ${sourceX - 4} ${sourceY - 3}
+                Z
+              `}
+            />
+            <path
+              className="orientation-source-arrow"
+              d={`
+                M ${sourceX} ${sourceY - 18}
+                L ${sourceX - 4} ${sourceY - 10}
+                L ${sourceX + 4} ${sourceY - 10}
+                Z
+              `}
+            />
+          </g>
+        </g>
+      </svg>
+
+      <div className="orientation-copy">
+        <strong>Top view</strong>
+        <span>Front is up. Positive azimuth turns to the listener&apos;s right.</span>
+      </div>
+    </div>
+  );
+}
 
 const formatBytes = (value?: number | null) => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -228,7 +291,7 @@ export default function App() {
 
   const displayDistance = coordinateMode === "spherical" ? distance : radius;
   const sourcePoint = useMemo(
-    () => polarToCartesian(azimuth, clamp(displayDistance / 30, 0.1, 1) * 118),
+    () => polarToCartesianTopView(azimuth, clamp(displayDistance / 30, 0.1, 1) * 118),
     [azimuth, displayDistance],
   );
   const directivityLabel = `${Math.round(directivity * 100)}%`;
@@ -276,8 +339,14 @@ export default function App() {
           <div className="section-label">Scene</div>
           <div className="stage-copy">
             <strong>{visibleCoordinates}</strong>
-            <span>Positive azimuth is to the listener&apos;s right. Audio stays silent until the HRTF cache is ready.</span>
+            <span>Top view: front is up, positive azimuth is to the listener&apos;s right. Audio stays silent until the HRTF cache is ready.</span>
           </div>
+
+          <OrientationBadge
+            azimuth={azimuth}
+            sourceYaw={sourceYaw}
+            directivity={directivity}
+          />
 
           <div className="stage">
             {!hrtfReady ? (
@@ -320,7 +389,7 @@ export default function App() {
               <div
                 className="source-heading"
                 style={{
-                  transform: `translate(-10px, -10px) rotate(${sourceYaw}deg)`,
+                  transform: `translate(-12px, -52px) rotate(${sourceYaw}deg)`,
                   opacity: 0.35 + directivity * 0.65,
                 }}
               ></div>

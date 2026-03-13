@@ -137,6 +137,77 @@ input {
   margin: 12px 0 18px;
 }
 
+.orientation-badge {
+  display: grid;
+  grid-template-columns: 124px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.orientation-badge svg {
+  width: 124px;
+  height: 124px;
+}
+
+.orientation-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.orientation-copy strong {
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.orientation-copy span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.orientation-ring,
+.orientation-axis,
+.orientation-link {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.orientation-ring {
+  stroke: rgba(136, 166, 171, 0.24);
+  stroke-dasharray: 3 6;
+}
+
+.orientation-axis {
+  stroke: rgba(136, 166, 171, 0.16);
+}
+
+.orientation-link {
+  stroke: rgba(248, 184, 95, 0.44);
+  stroke-dasharray: 4 5;
+}
+
+.orientation-listener {
+  fill: #dcebe7;
+}
+
+.orientation-source {
+  fill: var(--accent-warm);
+}
+
+.orientation-source-beam {
+  fill: rgba(248, 184, 95, 0.3);
+}
+
+.orientation-source-arrow {
+  fill: rgba(255, 247, 213, 0.95);
+}
+
 .stage {
   position: relative;
   min-height: 380px;
@@ -258,11 +329,24 @@ input {
 }
 
 .listener-head {
+  position: relative;
   width: 42px;
   height: 42px;
   border-radius: 50%;
   background: linear-gradient(180deg, #edf8f5, #a8c3bf);
   box-shadow: 0 0 0 10px rgba(105, 240, 194, 0.06);
+}
+
+.listener-head::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 12px;
+  clip-path: polygon(50% 0, 0 100%, 100% 100%);
+  background: rgba(9, 18, 23, 0.78);
 }
 
 .listener span,
@@ -290,13 +374,13 @@ input {
 
 .source-heading {
   position: absolute;
-  width: 54px;
-  height: 20px;
+  width: 24px;
+  height: 52px;
   left: 0;
   top: 0;
-  border-radius: 999px 999px 999px 999px;
-  background: linear-gradient(90deg, rgba(248, 184, 95, 0.7), rgba(248, 184, 95, 0.08));
-  transform-origin: 10px 10px;
+  clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%);
+  background: linear-gradient(180deg, rgba(255, 247, 213, 0.88), rgba(248, 184, 95, 0.14));
+  transform-origin: 12px 42px;
 }
 
 .stage-footer {
@@ -499,6 +583,12 @@ input[type="range"]::-moz-range-thumb {
 
   .stage {
     min-height: 300px;
+  }
+
+  .orientation-badge {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
   }
 
   .ring-3 {
