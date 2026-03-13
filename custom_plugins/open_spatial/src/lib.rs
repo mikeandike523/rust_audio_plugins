@@ -250,13 +250,71 @@ impl SpatialPose {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DelayLine {
+    buf: Vec<f32>,
+    delay_samples: usize,
+    read_pos: usize,
+    write_pos: usize,
+}
+
+impl DelayLine {
+    fn new() -> Self {
+        Self {
+            buf: vec![0.0],
+            delay_samples: 0,
+            read_pos: 0,
+            write_pos: 0,
+        }
+    }
+
+    fn set_delay_samples(&mut self, delay_samples: usize) {
+        self.delay_samples = delay_samples;
+
+        if self.buf.len() < delay_samples + 1 {
+            self.buf.resize(delay_samples + 1, 0.0);
+        }
+
+        if delay_samples == 0 {
+            self.read_pos = self.write_pos;
+        } else if self.write_pos >= delay_samples {
+            self.read_pos = self.write_pos - delay_samples;
+        } else {
+            self.read_pos = self.buf.len() + self.write_pos - delay_samples;
+        }
+    }
+
+    fn apply(&mut self, samples: &mut [f32]) {
+        if self.delay_samples == 0 {
+            return;
+        }
+
+        for sample in samples {
+            self.buf[self.write_pos] = *sample;
+            self.write_pos = (self.write_pos + 1) % self.buf.len();
+
+            *sample = self.buf[self.read_pos];
+            self.read_pos = (self.read_pos + 1) % self.buf.len();
+        }
+    }
+}
+
 struct HrtfEngine {
     sofa: Sofar,
     filter: Filter,
     renderer: Renderer,
+    sample_rate: f32,
     mono_input: Vec<f32>,
     output_left: Vec<f32>,
     output_right: Vec<f32>,
+    chunk_input: Vec<f32>,
+    chunk_output_left: Vec<f32>,
+    chunk_output_right: Vec<f32>,
+    pending_input: Vec<f32>,
+    pending_output_left: Vec<f32>,
+    pending_output_right: Vec<f32>,
+    left_delay: DelayLine,
+    right_delay: DelayLine,
 }
 
 impl HrtfEngine {
@@ -277,9 +335,18 @@ impl HrtfEngine {
             sofa,
             filter,
             renderer,
+            sample_rate,
             mono_input: Vec::new(),
             output_left: Vec::new(),
             output_right: Vec::new(),
+            chunk_input: vec![0.0; HRTF_PARTITION_LEN],
+            chunk_output_left: vec![0.0; HRTF_PARTITION_LEN],
+            chunk_output_right: vec![0.0; HRTF_PARTITION_LEN],
+            pending_input: Vec::new(),
+            pending_output_left: Vec::new(),
+            pending_output_right: Vec::new(),
+            left_delay: DelayLine::new(),
+            right_delay: DelayLine::new(),
         })
     }
 
@@ -303,6 +370,8 @@ impl HrtfEngine {
         out_right: &mut [f32],
     ) -> Result<(), String> {
         self.ensure_buffer_len(mono_input.len());
+        self.output_left.fill(0.0);
+        self.output_right.fill(0.0);
 
         let direction = pose.position.normalized();
         let to_listener = Vec3 {
@@ -356,13 +425,49 @@ impl HrtfEngine {
             &mut self.filter,
         );
         self.renderer.set_filter(&self.filter);
-        self.renderer
-            .process_block(
-                &self.mono_input,
-                &mut self.output_left,
-                &mut self.output_right,
-            )
-            .map_err(|err| format!("Failed to process HRTF block: {err}"))?;
+        self.pending_input.extend_from_slice(&self.mono_input);
+
+        while self.pending_input.len() >= HRTF_PARTITION_LEN {
+            self.chunk_input
+                .copy_from_slice(&self.pending_input[..HRTF_PARTITION_LEN]);
+            self.pending_input.drain(..HRTF_PARTITION_LEN);
+
+            self.renderer
+                .process_block(
+                    &self.chunk_input,
+                    &mut self.chunk_output_left,
+                    &mut self.chunk_output_right,
+                )
+                .map_err(|err| format!("Failed to process HRTF block: {err}"))?;
+
+            self.left_delay
+                .set_delay_samples((self.filter.ldelay * self.sample_rate) as usize);
+            self.right_delay
+                .set_delay_samples((self.filter.rdelay * self.sample_rate) as usize);
+            self.left_delay.apply(&mut self.chunk_output_left);
+            self.right_delay.apply(&mut self.chunk_output_right);
+
+            self.pending_output_left
+                .extend_from_slice(&self.chunk_output_left);
+            self.pending_output_right
+                .extend_from_slice(&self.chunk_output_right);
+        }
+
+        let needed = mono_input.len();
+        let available = self
+            .pending_output_left
+            .len()
+            .min(self.pending_output_right.len())
+            .min(needed);
+
+        self.output_left.fill(0.0);
+        self.output_right.fill(0.0);
+        if available > 0 {
+            self.output_left[..available].copy_from_slice(&self.pending_output_left[..available]);
+            self.output_right[..available].copy_from_slice(&self.pending_output_right[..available]);
+            self.pending_output_left.drain(..available);
+            self.pending_output_right.drain(..available);
+        }
 
         out_left.copy_from_slice(&self.output_left);
         out_right.copy_from_slice(&self.output_right);
@@ -676,7 +781,6 @@ impl Plugin for OpenSpatial {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        self.update_sample_rate(context.transport().sample_rate);
         self.try_load_hrtf_from_cache();
 
         let mut samples_remaining = self.meter_samples_remaining;

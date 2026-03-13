@@ -192,7 +192,7 @@ function ControlRow(props: {
       </div>
       <div className="slider-shell">
         {centerPercent != null ? (
-          <span className="slider-center-mark" style={{ left: `calc(${centerPercent}% - 1px)` }} />
+          <span className="slider-center-mark" style={{ left: `${centerPercent}%` }} />
         ) : null}
         <input
           type="range"
