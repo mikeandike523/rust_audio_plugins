@@ -16,6 +16,7 @@ type PluginMessage =
       alwaysTowardsHead?: boolean;
       directivity?: number;
       outputGain?: number;
+      radialMultiply?: number;
       pluginVersion?: string;
       rendererId?: string;
       cachePath?: string;
@@ -230,6 +231,7 @@ export default function App() {
   const [alwaysTowardsHead, setAlwaysTowardsHead] = useState(true);
   const [directivity, setDirectivity] = useState(0.65);
   const [outputGain, setOutputGain] = useState(-3);
+  const [radialMultiply, setRadialMultiply] = useState(1.0);
   const [status, setStatus] = useState("Waiting for plugin...");
   const [cachePath, setCachePath] = useState("");
   const [hrtfPath, setHrtfPath] = useState("");
@@ -292,6 +294,7 @@ export default function App() {
         setAlwaysTowardsHead(message.alwaysTowardsHead ?? true);
         setDirectivity(message.directivity ?? 0);
         setOutputGain(message.outputGain ?? 0);
+        setRadialMultiply(message.radialMultiply ?? 1.0);
         setPluginVersion(message.pluginVersion ?? null);
         setRendererId(message.rendererId ?? "sofa-runtime-fetch-v1");
         setCachePath(message.cachePath ?? "");
@@ -574,6 +577,22 @@ export default function App() {
               onChange={(value) => {
                 setOutputGain(value);
                 sendToPluginSafe({ type: "SetOutputGain", value });
+              }}
+            />
+
+            <ControlRow
+              label="Radial Multiply"
+              value={radialMultiply}
+              min={-1.0}
+              max={1.0}
+              step={0.01}
+              unit="×"
+              digits={2}
+              centerValue={1.0}
+              hint="Scales horizontal position. Negative flips front↔back. At azimuth 0°: 1.0=front, −1.0=rear."
+              onChange={(value) => {
+                setRadialMultiply(value);
+                sendToPluginSafe({ type: "SetRadialMultiply", value });
               }}
             />
           </div>

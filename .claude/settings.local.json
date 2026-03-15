@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "WebSearch",
+      "WebFetch(domain:zenodo.org)",
+      "Bash(cargo build:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}

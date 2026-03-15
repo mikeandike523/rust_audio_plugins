@@ -27,8 +27,8 @@ const METER_UPDATE_SECONDS: f32 = 0.1;
 const ANALYTIC_RENDERER_ID: &str = "sofa-runtime-fetch-v1";
 const ASSET_MANIFEST_FILE: &str = "asset_manifest.json";
 const CACHE_NAMESPACE: &str = "wth_plugins/open_spatial";
-const HRTF_URL: &str = "https://zenodo.org/records/3928297/files/HRIR_L2354.sofa?download=1";
-const HRTF_FILENAME: &str = "HRIR_L2354.sofa";
+const HRTF_URL: &str = "https://zenodo.org/records/3928297/files/HRIR_FULL2DEG.sofa?download=1";
+const HRTF_FILENAME: &str = "HRIR_FULL2DEG.sofa";
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 const HRTF_PARTITION_LEN: usize = 64;
 
@@ -89,6 +89,8 @@ struct OpenSpatialParams {
     directivity: FloatParam,
     #[id = "outgn"]
     output_gain: FloatParam,
+    #[id = "radmul"]
+    radial_multiply: FloatParam,
 
     #[persist = "asset_cache_dir"]
     asset_cache_dir: Arc<Mutex<String>>,
@@ -107,6 +109,7 @@ impl Default for OpenSpatialParams {
         let always_towards_head_dirty = params_dirty.clone();
         let directivity_dirty = params_dirty.clone();
         let output_gain_dirty = params_dirty.clone();
+        let radial_multiply_dirty = params_dirty.clone();
 
         Self {
             azimuth: FloatParam::new(
@@ -194,6 +197,19 @@ impl Default for OpenSpatialParams {
             .with_unit(" dB")
             .with_callback(Arc::new(move |_| {
                 output_gain_dirty.store(true, Ordering::Relaxed);
+            })),
+            radial_multiply: FloatParam::new(
+                "Radial Multiply",
+                1.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_step_size(0.01)
+            .with_callback(Arc::new(move |_| {
+                radial_multiply_dirty.store(true, Ordering::Relaxed);
             })),
             asset_cache_dir: Arc::new(Mutex::new(String::new())),
             params_dirty,
@@ -299,11 +315,68 @@ impl DelayLine {
     }
 }
 
+/// Biquad peaking EQ (Direct Form I) — used to boost pinna-cue frequencies.
+#[derive(Debug, Clone)]
+struct BiquadFilter {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl BiquadFilter {
+    /// Peaking EQ coefficients from the Audio EQ Cookbook.
+    fn new_peaking_eq(sample_rate: f32, freq: f32, gain_db: f32, q: f32) -> Self {
+        let a = 10.0_f32.powf(gain_db / 40.0);
+        let w0 = 2.0 * PI * freq / sample_rate;
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let alpha = sin_w0 / (2.0 * q);
+        let b0 = 1.0 + alpha * a;
+        let b1 = -2.0 * cos_w0;
+        let b2 = 1.0 - alpha * a;
+        let a0 = 1.0 + alpha / a;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha / a;
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
+    fn process(&mut self, samples: &mut [f32]) {
+        for x in samples.iter_mut() {
+            let y = self.b0 * *x + self.b1 * self.x1 + self.b2 * self.x2
+                - self.a1 * self.y1
+                - self.a2 * self.y2;
+            self.x2 = self.x1;
+            self.x1 = *x;
+            self.y2 = self.y1;
+            self.y1 = y;
+            *x = y;
+        }
+    }
+}
+
 struct HrtfEngine {
     sofa: Sofar,
     filter: Filter,
     renderer: Renderer,
     sample_rate: f32,
+    /// Peaking EQ boosting 8 kHz (+4 dB, Q=0.88) to enhance pinna spectral cues.
+    pinna_filter: BiquadFilter,
     mono_input: Vec<f32>,
     output_left: Vec<f32>,
     output_right: Vec<f32>,
@@ -331,11 +404,17 @@ impl HrtfEngine {
             .build()
             .map_err(|err| format!("Failed to build HRTF renderer: {err}"))?;
 
+        // Boost pinna-cue frequencies (4–12 kHz range) to make elevation and
+        // front-back spectral notches more perceptible relative to the rest of
+        // the signal.  +4 dB peak at 8 kHz, Q=0.88.
+        let pinna_filter = BiquadFilter::new_peaking_eq(sample_rate, 8000.0, 4.0, 0.88);
+
         Ok(Self {
             sofa,
             filter,
             renderer,
             sample_rate,
+            pinna_filter,
             mono_input: Vec::new(),
             output_left: Vec::new(),
             output_right: Vec::new(),
@@ -366,6 +445,7 @@ impl HrtfEngine {
         always_towards_head: bool,
         directivity_amount: f32,
         output_gain_db: f32,
+        radial_multiply: f32,
         out_left: &mut [f32],
         out_right: &mut [f32],
     ) -> Result<(), String> {
@@ -379,21 +459,12 @@ impl HrtfEngine {
             y: -direction.y,
             z: -direction.z,
         };
+        // Fixed: always_towards_head now uses the full 3D direction so that
+        // sources above/below the listener don't lose their directivity gain.
+        // The manual-yaw path stays in the horizontal plane intentionally (yaw
+        // is a horizontal rotation only).
         let source_forward = if always_towards_head {
-            let horizontal_to_listener = Vec3 {
-                x: to_listener.x,
-                y: to_listener.y,
-                z: 0.0,
-            };
-            if horizontal_to_listener.norm() > 1.0e-6 {
-                horizontal_to_listener.normalized()
-            } else {
-                Vec3 {
-                    x: 1.0,
-                    y: 0.0,
-                    z: 0.0,
-                }
-            }
+            to_listener // already normalized; source faces listener in 3D
         } else {
             let source_yaw_rad = source_yaw_deg.to_radians();
             Vec3 {
@@ -409,19 +480,38 @@ impl HrtfEngine {
             (0.15 + 0.85 * cardioid).powf(1.0 + directivity_amount * 3.0),
             directivity_amount.clamp(0.0, 1.0),
         );
-        let distance_gain = pose.distance_m.max(1.0).sqrt().recip();
+
+        // Radial multiply scales only the horizontal (XY) plane so that
+        // azimuth angle and elevation angle are preserved while the apparent
+        // distance and the strength of HRTF cues both increase.
+        let sofa_x = pose.position.x * radial_multiply;
+        let sofa_y = pose.position.y * radial_multiply;
+        let sofa_z = pose.position.z; // Z (elevation) left unchanged
+
+        // Fixed: use inverse-distance law (1/d, −6 dB/doubling) instead of
+        // the previous 1/√d which was too slow to attenuate.
+        let effective_distance = (sofa_x * sofa_x + sofa_y * sofa_y + sofa_z * sofa_z)
+            .sqrt()
+            .max(1.0);
+        let distance_gain = effective_distance.recip();
+
         let input_gain = util::db_to_gain_fast(output_gain_db) * directivity_gain * distance_gain;
 
         for (dst, src) in self.mono_input.iter_mut().zip(mono_input.iter()) {
             *dst = *src * input_gain;
         }
 
+        // Boost the pinna-cue frequency region before HRTF convolution so
+        // that the elevation and front-back spectral notches encoded in the
+        // HRTF filters are more audible relative to the rest of the spectrum.
+        self.pinna_filter.process(&mut self.mono_input);
+
         // SOFA/libmysofa uses +X = front, +Y = listener-left, +Z = up.
         // Our plugin/UI uses +X = front, +Y = listener-right, so the lateral axis must be flipped.
         self.sofa.filter(
-            pose.position.x,
-            -pose.position.y,
-            pose.position.z,
+            sofa_x,
+            -sofa_y,
+            sofa_z,
             &mut self.filter,
         );
         self.renderer.set_filter(&self.filter);
@@ -537,6 +627,7 @@ enum Action {
     SetAlwaysTowardsHead { value: bool },
     SetDirectivity { value: f32 },
     SetOutputGain { value: f32 },
+    SetRadialMultiply { value: f32 },
     ValidateCache,
 }
 
@@ -826,6 +917,7 @@ impl Plugin for OpenSpatial {
             let always_towards_head = self.params.always_towards_head.value();
             let directivity = self.params.directivity.value();
             let output_gain = self.params.output_gain.value();
+            let radial_multiply = self.params.radial_multiply.value();
 
             if let Err(err) = engine.render_block(
                 &mono_input,
@@ -834,6 +926,7 @@ impl Plugin for OpenSpatial {
                 always_towards_head,
                 directivity,
                 output_gain,
+                radial_multiply,
                 &mut output_left,
                 &mut output_right,
             ) {
@@ -993,6 +1086,13 @@ impl Plugin for OpenSpatial {
                                     format!("value={value}"),
                                 );
                                 set_float_parameter(&setter, &params.output_gain, value);
+                            }
+                            Action::SetRadialMultiply { value } => {
+                                remote_logger.log_step(
+                                    "editor.action_set_radial_multiply",
+                                    format!("value={value}"),
+                                );
+                                set_float_parameter(&setter, &params.radial_multiply, value);
                             }
                             Action::ValidateCache => {
                                 remote_logger.log_step(
@@ -1388,6 +1488,7 @@ fn send_state_message(
         "alwaysTowardsHead": params.always_towards_head.value(),
         "directivity": params.directivity.value(),
         "outputGain": params.output_gain.value(),
+        "radialMultiply": params.radial_multiply.value(),
         "pluginVersion": env!("CARGO_PKG_VERSION"),
         "rendererId": ANALYTIC_RENDERER_ID,
         "cachePath": runtime.cache_path,
