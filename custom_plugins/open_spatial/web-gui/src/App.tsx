@@ -6,6 +6,11 @@ type MeterValues = {
   r: number;
 };
 
+type SofaOption = {
+  key: string;
+  name: string;
+};
+
 type PluginMessage =
   | {
       type: "State";
@@ -28,6 +33,30 @@ type PluginMessage =
       downloadedBytes?: number | null;
       totalBytes?: number | null;
       hrtfReady?: boolean;
+      // Pinna
+      pinnaEnabled?: boolean;
+      pinnaFreq?: number;
+      pinnaGainDb?: number;
+      pinnaQ?: number;
+      // HRTF engine
+      hrtfInterpolate?: boolean;
+      itdEnabled?: boolean;
+      // Distance model
+      distanceExponent?: number;
+      distanceMinM?: number;
+      // Directivity model
+      directivityFloor?: number;
+      directivityRange?: number;
+      directivityExpScale?: number;
+      // Reverb
+      reverbEnabled?: boolean;
+      reverbWet?: number;
+      reverbRoomSize?: number;
+      reverbPreDelayMs?: number;
+      reverbDamping?: number;
+      // SOFA selection
+      sofaKey?: string;
+      sofaOptions?: SofaOption[];
     }
   | {
       type: "Meter";
@@ -223,7 +252,35 @@ function ControlRow(props: {
   );
 }
 
+function ToggleRow(props: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const { label, description, checked, onChange } = props;
+  return (
+    <div className="toggle-card">
+      <div>
+        <strong>{label}</strong>
+        {description ? <span>{description}</span> : null}
+      </div>
+      <label className="switch">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="switch-track">
+          <span className="switch-thumb"></span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
 export default function App() {
+  // --- Spatial ---
   const [azimuth, setAzimuth] = useState(30);
   const [elevation, setElevation] = useState(0);
   const [distance, setDistance] = useState(1.5);
@@ -232,6 +289,38 @@ export default function App() {
   const [directivity, setDirectivity] = useState(0.65);
   const [outputGain, setOutputGain] = useState(-3);
   const [radialMultiply, setRadialMultiply] = useState(1.0);
+
+  // --- Pinna pre-filter ---
+  const [pinnaEnabled, setPinnaEnabled] = useState(true);
+  const [pinnaFreq, setPinnaFreq] = useState(8000);
+  const [pinnaGainDb, setPinnaGainDb] = useState(4.0);
+  const [pinnaQ, setPinnaQ] = useState(0.88);
+
+  // --- HRTF engine ---
+  const [hrtfInterpolate, setHrtfInterpolate] = useState(true);
+  const [itdEnabled, setItdEnabled] = useState(true);
+
+  // --- Distance model ---
+  const [distanceExponent, setDistanceExponent] = useState(1.0);
+  const [distanceMinM, setDistanceMinM] = useState(1.0);
+
+  // --- Directivity model ---
+  const [directivityFloor, setDirectivityFloor] = useState(0.15);
+  const [directivityRange, setDirectivityRange] = useState(0.85);
+  const [directivityExpScale, setDirectivityExpScale] = useState(3.0);
+
+  // --- Reverb ---
+  const [reverbEnabled, setReverbEnabled] = useState(false);
+  const [reverbWet, setReverbWet] = useState(0.15);
+  const [reverbRoomSize, setReverbRoomSize] = useState(0.5);
+  const [reverbPreDelayMs, setReverbPreDelayMs] = useState(20.0);
+  const [reverbDamping, setReverbDamping] = useState(0.5);
+
+  // --- SOFA selection ---
+  const [sofaKey, setSofaKey] = useState("HRIR_FULL2DEG");
+  const [sofaOptions, setSofaOptions] = useState<SofaOption[]>([]);
+
+  // --- Init / status ---
   const [status, setStatus] = useState("Waiting for plugin...");
   const [cachePath, setCachePath] = useState("");
   const [hrtfPath, setHrtfPath] = useState("");
@@ -287,6 +376,7 @@ export default function App() {
           hrtfReady: Boolean(message.hrtfReady),
           alwaysTowardsHead: Boolean(message.alwaysTowardsHead ?? true),
         });
+        // Spatial
         setAzimuth(message.azimuth ?? 0);
         setElevation(message.elevation ?? 0);
         setDistance(message.distance ?? 1);
@@ -295,6 +385,31 @@ export default function App() {
         setDirectivity(message.directivity ?? 0);
         setOutputGain(message.outputGain ?? 0);
         setRadialMultiply(message.radialMultiply ?? 1.0);
+        // Pinna
+        setPinnaEnabled(message.pinnaEnabled ?? true);
+        setPinnaFreq(message.pinnaFreq ?? 8000);
+        setPinnaGainDb(message.pinnaGainDb ?? 4.0);
+        setPinnaQ(message.pinnaQ ?? 0.88);
+        // HRTF engine
+        setHrtfInterpolate(message.hrtfInterpolate ?? true);
+        setItdEnabled(message.itdEnabled ?? true);
+        // Distance model
+        setDistanceExponent(message.distanceExponent ?? 1.0);
+        setDistanceMinM(message.distanceMinM ?? 1.0);
+        // Directivity model
+        setDirectivityFloor(message.directivityFloor ?? 0.15);
+        setDirectivityRange(message.directivityRange ?? 0.85);
+        setDirectivityExpScale(message.directivityExpScale ?? 3.0);
+        // Reverb
+        setReverbEnabled(message.reverbEnabled ?? false);
+        setReverbWet(message.reverbWet ?? 0.15);
+        setReverbRoomSize(message.reverbRoomSize ?? 0.5);
+        setReverbPreDelayMs(message.reverbPreDelayMs ?? 20.0);
+        setReverbDamping(message.reverbDamping ?? 0.5);
+        // SOFA selection
+        if (message.sofaKey != null) setSofaKey(message.sofaKey);
+        if (message.sofaOptions != null) setSofaOptions(message.sofaOptions);
+        // Plugin info / status
         setPluginVersion(message.pluginVersion ?? null);
         setRendererId(message.rendererId ?? "sofa-runtime-fetch-v1");
         setCachePath(message.cachePath ?? "");
@@ -465,26 +580,15 @@ export default function App() {
         <div className="controls-card">
           <div className="section-label">Controls</div>
 
-          <div className="toggle-card">
-            <div>
-              <strong>Always Towards Head</strong>
-              <span>Automatically aim the source toward the listener.</span>
-            </div>
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={alwaysTowardsHead}
-                onChange={(event) => {
-                  const value = event.target.checked;
-                  setAlwaysTowardsHead(value);
-                  sendToPluginSafe({ type: "SetAlwaysTowardsHead", value });
-                }}
-              />
-              <span className="switch-track">
-                <span className="switch-thumb"></span>
-              </span>
-            </label>
-          </div>
+          <ToggleRow
+            label="Always Towards Head"
+            description="Automatically aim the source toward the listener."
+            checked={alwaysTowardsHead}
+            onChange={(value) => {
+              setAlwaysTowardsHead(value);
+              sendToPluginSafe({ type: "SetAlwaysTowardsHead", value });
+            }}
+          />
 
           <div className="controls-note">
             Angle sliders center on double-click. Neutral center is 0 degrees.
@@ -595,6 +699,301 @@ export default function App() {
                 sendToPluginSafe({ type: "SetRadialMultiply", value });
               }}
             />
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Signal Processing Controls                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="panel signal-section">
+        <div className="section-label" style={{ padding: "18px 18px 0" }}>
+          Signal Processing
+        </div>
+
+        <div className="signal-grid">
+          {/* ---- HRTF Source (full width) ---- */}
+          <div className="signal-card signal-card--wide">
+            <div className="signal-card-title">HRTF Source</div>
+
+            <div className="signal-card-body">
+              <div className="signal-col">
+                <div className="signal-sublabel">SOFA File</div>
+                <div className="radio-group">
+                  {sofaOptions.length === 0 ? (
+                    <div className="radio-row is-placeholder">
+                      <span>{sofaKey}</span>
+                      <span className="radio-hint">Loading options…</span>
+                    </div>
+                  ) : (
+                    sofaOptions.map((opt) => (
+                      <button
+                        key={opt.key}
+                        className={`radio-row${sofaKey === opt.key ? " is-selected" : ""}`}
+                        onClick={() => {
+                          setSofaKey(opt.key);
+                          sendToPluginSafe({ type: "SetSofaSelection", key: opt.key });
+                        }}
+                      >
+                        <span className="radio-dot" aria-hidden="true"></span>
+                        <span className="radio-label">{opt.name}</span>
+                        <span className="radio-key">{opt.key}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="signal-col">
+                <div className="signal-sublabel">Lookup Mode</div>
+                <ToggleRow
+                  label="HRTF Interpolation"
+                  description="Tri-linear interpolation between measured directions. Disable for nearest-neighbor."
+                  checked={hrtfInterpolate}
+                  onChange={(value) => {
+                    setHrtfInterpolate(value);
+                    sendToPluginSafe({ type: "SetHrtfInterpolate", value });
+                  }}
+                />
+                <ToggleRow
+                  label="ITD Delays"
+                  description="Apply interaural time delay from SOFA data. Disabling removes per-ear sample offset."
+                  checked={itdEnabled}
+                  onChange={(value) => {
+                    setItdEnabled(value);
+                    sendToPluginSafe({ type: "SetItdEnabled", value });
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ---- Pinna Pre-Filter ---- */}
+          <div className="signal-card">
+            <div className="signal-card-title">Pinna Pre-Filter</div>
+            <ToggleRow
+              label="Enable"
+              description="Peaking EQ boost in the pinna-relevant frequency band."
+              checked={pinnaEnabled}
+              onChange={(value) => {
+                setPinnaEnabled(value);
+                sendToPluginSafe({ type: "SetPinnaEnabled", value });
+              }}
+            />
+            <div className={`control-group${pinnaEnabled ? "" : " is-section-disabled"}`}>
+              <ControlRow
+                label="Center Frequency"
+                value={pinnaFreq}
+                min={2000}
+                max={16000}
+                step={10}
+                unit=" Hz"
+                digits={0}
+                disabled={!pinnaEnabled}
+                onChange={(value) => {
+                  setPinnaFreq(value);
+                  sendToPluginSafe({ type: "SetPinnaFreq", value });
+                }}
+              />
+              <ControlRow
+                label="Gain"
+                value={pinnaGainDb}
+                min={-12}
+                max={12}
+                step={0.1}
+                unit=" dB"
+                centerValue={0}
+                disabled={!pinnaEnabled}
+                onChange={(value) => {
+                  setPinnaGainDb(value);
+                  sendToPluginSafe({ type: "SetPinnaGainDb", value });
+                }}
+              />
+              <ControlRow
+                label="Q"
+                value={pinnaQ}
+                min={0.1}
+                max={8}
+                step={0.01}
+                unit=""
+                digits={2}
+                disabled={!pinnaEnabled}
+                onChange={(value) => {
+                  setPinnaQ(value);
+                  sendToPluginSafe({ type: "SetPinnaQ", value });
+                }}
+              />
+            </div>
+          </div>
+
+          {/* ---- Distance Model ---- */}
+          <div className="signal-card">
+            <div className="signal-card-title">Distance Model</div>
+            <p className="signal-card-note">
+              Gain = distance<sup>−exp</sup>. Exponent 1 = inverse distance law.
+              Distance Min clamps the minimum rendering distance to avoid clipping.
+            </p>
+            <div className="control-group">
+              <ControlRow
+                label="Distance Exponent"
+                value={distanceExponent}
+                min={0}
+                max={2}
+                step={0.01}
+                unit=""
+                digits={2}
+                centerValue={1.0}
+                hint="0 = flat; 1 = inverse distance; 2 = inverse square"
+                onChange={(value) => {
+                  setDistanceExponent(value);
+                  sendToPluginSafe({ type: "SetDistanceExponent", value });
+                }}
+              />
+              <ControlRow
+                label="Distance Minimum"
+                value={distanceMinM}
+                min={0.1}
+                max={5}
+                step={0.01}
+                unit=" m"
+                digits={2}
+                hint="Clamps effective distance to prevent excessive gain at close range"
+                onChange={(value) => {
+                  setDistanceMinM(value);
+                  sendToPluginSafe({ type: "SetDistanceMinM", value });
+                }}
+              />
+            </div>
+          </div>
+
+          {/* ---- Directivity Model (full width) ---- */}
+          <div className="signal-card signal-card--wide">
+            <div className="signal-card-title">Directivity Model</div>
+            <p className="signal-card-note">
+              Cardioid-based directivity: gain = lerp(1, (floor + range × cardioid)<sup>1 + amount × expScale</sup>, amount).
+              Floor prevents complete silence at rear. Range controls rolloff depth. Exp Scale sharpens the beam.
+            </p>
+            <div className="control-group">
+              <ControlRow
+                label="Floor"
+                value={directivityFloor}
+                min={0}
+                max={0.5}
+                step={0.01}
+                unit=""
+                digits={2}
+                hint="Minimum gain at the rear (0 = silent at 180°)"
+                onChange={(value) => {
+                  setDirectivityFloor(value);
+                  sendToPluginSafe({ type: "SetDirectivityFloor", value });
+                }}
+              />
+              <ControlRow
+                label="Range"
+                value={directivityRange}
+                min={0}
+                max={1}
+                step={0.01}
+                unit=""
+                digits={2}
+                hint="Cardioid weight — how much front-vs-rear matters"
+                onChange={(value) => {
+                  setDirectivityRange(value);
+                  sendToPluginSafe({ type: "SetDirectivityRange", value });
+                }}
+              />
+              <ControlRow
+                label="Exp Scale"
+                value={directivityExpScale}
+                min={0.5}
+                max={10}
+                step={0.05}
+                unit=""
+                digits={2}
+                hint="Sharpens the directivity curve — higher = tighter beam"
+                onChange={(value) => {
+                  setDirectivityExpScale(value);
+                  sendToPluginSafe({ type: "SetDirectivityExpScale", value });
+                }}
+              />
+            </div>
+          </div>
+
+          {/* ---- Room / Reverb (full width) ---- */}
+          <div className="signal-card signal-card--wide">
+            <div className="signal-card-title">Room / Reverb</div>
+            <ToggleRow
+              label="Enable Reverb"
+              description="Freeverb (Schroeder-Moorer) diffuse field reverb added on top of the HRTF output."
+              checked={reverbEnabled}
+              onChange={(value) => {
+                setReverbEnabled(value);
+                sendToPluginSafe({ type: "SetReverbEnabled", value });
+              }}
+            />
+            <div className={`control-group${reverbEnabled ? "" : " is-section-disabled"}`}>
+              <ControlRow
+                label="Wet Mix"
+                value={reverbWet}
+                min={0}
+                max={1}
+                step={0.01}
+                unit=""
+                digits={2}
+                disabled={!reverbEnabled}
+                hint="Amount of reverb signal mixed into the output"
+                onChange={(value) => {
+                  setReverbWet(value);
+                  sendToPluginSafe({ type: "SetReverbWet", value });
+                }}
+              />
+              <ControlRow
+                label="Room Size"
+                value={reverbRoomSize}
+                min={0}
+                max={1}
+                step={0.01}
+                unit=""
+                digits={2}
+                centerValue={0.5}
+                disabled={!reverbEnabled}
+                hint="Maps to comb filter feedback — higher = longer decay"
+                onChange={(value) => {
+                  setReverbRoomSize(value);
+                  sendToPluginSafe({ type: "SetReverbRoomSize", value });
+                }}
+              />
+              <ControlRow
+                label="Pre-Delay"
+                value={reverbPreDelayMs}
+                min={0}
+                max={100}
+                step={0.5}
+                unit=" ms"
+                digits={1}
+                disabled={!reverbEnabled}
+                hint="Delay before reverb onset — simulates room size / distance to first reflection"
+                onChange={(value) => {
+                  setReverbPreDelayMs(value);
+                  sendToPluginSafe({ type: "SetReverbPreDelayMs", value });
+                }}
+              />
+              <ControlRow
+                label="Damping"
+                value={reverbDamping}
+                min={0}
+                max={1}
+                step={0.01}
+                unit=""
+                digits={2}
+                disabled={!reverbEnabled}
+                hint="High-frequency damping in the comb filters — higher = darker reverb tail"
+                onChange={(value) => {
+                  setReverbDamping(value);
+                  sendToPluginSafe({ type: "SetReverbDamping", value });
+                }}
+              />
+            </div>
           </div>
         </div>
       </section>

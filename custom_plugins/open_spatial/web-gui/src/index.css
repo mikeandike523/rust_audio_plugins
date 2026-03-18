@@ -673,6 +673,153 @@ input[type="range"]::-moz-range-thumb {
   padding: 2px 8px 12px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Signal Processing Section                                           */
+/* ------------------------------------------------------------------ */
+
+.signal-section {
+  padding: 0 0 18px;
+}
+
+.signal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 14px 18px 0;
+}
+
+.signal-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.signal-card--wide {
+  grid-column: 1 / -1;
+}
+
+.signal-card-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+
+.signal-card-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-card-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.signal-col {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.signal-sublabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+/* ---- SOFA radio group ---- */
+
+.radio-group {
+  display: grid;
+  gap: 8px;
+}
+
+.radio-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.radio-row:hover {
+  border-color: rgba(105, 240, 194, 0.22);
+  background: rgba(105, 240, 194, 0.06);
+}
+
+.radio-row.is-selected {
+  border-color: rgba(105, 240, 194, 0.42);
+  background: rgba(105, 240, 194, 0.1);
+}
+
+.radio-row.is-placeholder {
+  cursor: default;
+  opacity: 0.6;
+  grid-template-columns: 1fr auto;
+}
+
+.radio-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  position: relative;
+  flex-shrink: 0;
+}
+
+.radio-row.is-selected .radio-dot {
+  border-color: var(--accent);
+}
+
+.radio-row.is-selected .radio-dot::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.radio-label {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.radio-key {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.radio-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---- Disabled section (reverb / pinna when toggled off) ---- */
+
+.is-section-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive                                                          */
+/* ------------------------------------------------------------------ */
+
 @media (max-width: 980px) {
   .hero,
   .layout-grid,
@@ -681,6 +828,11 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .hero-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-grid,
+  .signal-card-body {
     grid-template-columns: 1fr;
   }
 }
