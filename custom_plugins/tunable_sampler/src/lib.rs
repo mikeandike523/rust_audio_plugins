@@ -277,12 +277,17 @@ impl Plugin for TunableSampler {
                                 setter.begin_set_parameter(&params.sample_start);
                                 setter.set_parameter(&params.sample_start, clamped);
                                 setter.end_set_parameter(&params.sample_start);
+                                // Suppress echo: the GUI already has the correct value, echoing
+                                // it back causes visual handle resets during throttled drags.
+                                params.sample_start_changed.store(false, Ordering::Relaxed);
                             }
                             Action::SetSampleEnd { value } => {
                                 let clamped = value.clamp(0.0, 1.0);
                                 setter.begin_set_parameter(&params.sample_end);
                                 setter.set_parameter(&params.sample_end, clamped);
                                 setter.end_set_parameter(&params.sample_end);
+                                // Suppress echo: same reason as SetSampleStart above.
+                                params.sample_end_changed.store(false, Ordering::Relaxed);
                             }
                             Action::SetResamplePointsInput { points } => {
                                 resample_points_input.store(points, Ordering::Relaxed);

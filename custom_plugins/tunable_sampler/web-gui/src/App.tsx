@@ -57,10 +57,33 @@ export default function App() {
     pollMs: null,
   });
 
+  // Stable sendPayload factories — must not be inline arrow fns or they recreate
+  // setValue on every render, which destabilises throttled drag handlers.
+  const gainSendPayload = useCallback(
+    (value: number) => ({ type: "SetGain", value }),
+    [],
+  );
+  const sampleStartSendPayload = useCallback(
+    (value: number) => ({ type: "SetSampleStart", value }),
+    [],
+  );
+  const sampleEndSendPayload = useCallback(
+    (value: number) => ({ type: "SetSampleEnd", value }),
+    [],
+  );
+  const resampleInputSendPayload = useCallback(
+    (value: number) => ({ type: "SetResamplePointsInput", points: value }),
+    [],
+  );
+  const resamplePitchSendPayload = useCallback(
+    (value: number) => ({ type: "SetResamplePointsPitch", points: value }),
+    [],
+  );
+
   const gainParam = useInitializedParam<number>({
     name: "gain",
     requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetGain", value }),
+    sendPayload: gainSendPayload,
     pollMs: null,
   });
 
@@ -68,7 +91,7 @@ export default function App() {
     name: "sampleStart",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetSampleStart", value }),
+    sendPayload: sampleStartSendPayload,
     pollMs: null,
   });
 
@@ -76,7 +99,7 @@ export default function App() {
     name: "sampleEnd",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetSampleEnd", value }),
+    sendPayload: sampleEndSendPayload,
     pollMs: null,
   });
 
@@ -84,7 +107,7 @@ export default function App() {
     name: "resamplePointsInput",
     initialValue: RESAMPLE_OPTIONS[2],
     requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetResamplePointsInput", points: value }),
+    sendPayload: resampleInputSendPayload,
     pollMs: null,
   });
 
@@ -92,7 +115,7 @@ export default function App() {
     name: "resamplePointsPitch",
     initialValue: RESAMPLE_OPTIONS[2],
     requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetResamplePointsPitch", points: value }),
+    sendPayload: resamplePitchSendPayload,
     pollMs: null,
   });
 
@@ -179,18 +202,23 @@ export default function App() {
     gainParam.setValue(clamped);
   };
 
+  // Destructure stable setValue references so callbacks don't depend on the
+  // whole param object (which is a new object reference on every render).
+  const { setValue: setSampleStart } = sampleStartParam;
+  const { setValue: setSampleEnd } = sampleEndParam;
+
   const handleSampleStartChange = useCallback(
     (value: number) => {
-      sampleStartParam.setValue(clamp(value, 0, 1));
+      setSampleStart(clamp(value, 0, 1));
     },
-    [sampleStartParam],
+    [setSampleStart],
   );
 
   const handleSampleEndChange = useCallback(
     (value: number) => {
-      sampleEndParam.setValue(clamp(value, 0, 1));
+      setSampleEnd(clamp(value, 0, 1));
     },
-    [sampleEndParam],
+    [setSampleEnd],
   );
 
   const handleResamplePointsInputChange = (value: number) => {
@@ -216,13 +244,13 @@ export default function App() {
 
   useEffect(() => {
     if (!sampleInfo) {
-      sampleStartParam.setValue(0);
-      sampleEndParam.setValue(0);
+      setSampleStart(0);
+      setSampleEnd(0);
       return;
     }
-    sampleStartParam.setValue(0);
-    sampleEndParam.setValue(1);
-  }, [sampleEndParam, sampleInfo, sampleStartParam]);
+    setSampleStart(0);
+    setSampleEnd(1);
+  }, [sampleInfo, setSampleStart, setSampleEnd]);
 
   return (
     <div className="panel">

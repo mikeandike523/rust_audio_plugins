@@ -39,31 +39,38 @@ type UsePluginMessagesOptions = {
   getAudioContext: () => AudioContext;
 };
 
-export const usePluginMessages = ({
-  pluginVersionParam,
-  projectFolderParam,
-  projectNameParam,
-  projectSampleRateParam,
-  gainParam,
-  sampleStartParam,
-  sampleEndParam,
-  resamplePointsInputParam,
-  resamplePointsPitchParam,
-  setStatus,
-  setCacheFolder,
-  setFolderError,
-  setSampleError,
-  setSampleInfo,
-  setResampleModal,
-  setResampleFading,
-  audioBufferRef,
-  getAudioContext,
-}: UsePluginMessagesOptions) => {
+export const usePluginMessages = (options: UsePluginMessagesOptions) => {
   const resampleTimeoutRef = useRef<number | null>(null);
+
+  // "Latest ref" pattern: always holds the most recent options so the effect
+  // can register the handler exactly once (on mount) without stale closures.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   useEffect(() => {
     (window as { onPluginMessage?: (message: PluginMessage) => void })
       .onPluginMessage = (message) => {
+      const {
+        pluginVersionParam,
+        projectFolderParam,
+        projectNameParam,
+        projectSampleRateParam,
+        gainParam,
+        sampleStartParam,
+        sampleEndParam,
+        resamplePointsInputParam,
+        resamplePointsPitchParam,
+        setStatus,
+        setCacheFolder,
+        setFolderError,
+        setSampleError,
+        setSampleInfo,
+        setResampleModal,
+        setResampleFading,
+        audioBufferRef,
+        getAudioContext,
+      } = optionsRef.current;
+
       if (message.type === "State") {
         let nextStatus = "Connected";
         if (typeof message.pluginVersion === "string") {
@@ -263,24 +270,8 @@ export const usePluginMessages = ({
         resampleTimeoutRef.current = null;
       }
     };
-  }, [
-    audioBufferRef,
-    gainParam,
-    sampleStartParam,
-    sampleEndParam,
-    getAudioContext,
-    pluginVersionParam,
-    projectFolderParam,
-    projectNameParam,
-    projectSampleRateParam,
-    resamplePointsInputParam,
-    resamplePointsPitchParam,
-    setCacheFolder,
-    setFolderError,
-    setResampleFading,
-    setResampleModal,
-    setSampleError,
-    setSampleInfo,
-    setStatus,
-  ]);
+  // Empty deps: register handler exactly once on mount. All runtime values are
+  // read via optionsRef.current so the handler is never stale.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 };

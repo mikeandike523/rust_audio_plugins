@@ -5,7 +5,11 @@
       "WebSearch",
       "WebFetch(domain:zenodo.org)",
       "Bash(cargo build:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(pnpm tsc:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm install:*)"
     ]
   }
 }
