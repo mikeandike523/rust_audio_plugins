@@ -10,3 +10,9 @@ repos_to_explore
 
 # For agents or I to mess around with code temporarily
 scratchpad
+
+# Commiting claude memory can be useful, but it risks occupying too much repo space,
+# getting stale (especially for memory items that are more broad),
+# or leaking credentials
+# So, just ignore it
+.claude
