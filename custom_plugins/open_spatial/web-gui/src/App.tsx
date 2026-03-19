@@ -41,6 +41,9 @@ type PluginMessage =
       // HRTF engine
       hrtfInterpolate?: boolean;
       itdEnabled?: boolean;
+      useSymmetricHrtf?: boolean;
+      analyticModelType?: string;
+      headRadiusCm?: number;
       // Distance model
       distanceExponent?: number;
       distanceMinM?: number;
@@ -299,6 +302,9 @@ export default function App() {
   // --- HRTF engine ---
   const [hrtfInterpolate, setHrtfInterpolate] = useState(true);
   const [itdEnabled, setItdEnabled] = useState(true);
+  const [useSymmetricHrtf, setUseSymmetricHrtf] = useState(false);
+  const [analyticModelType, setAnalyticModelType] = useState("woodworth");
+  const [headRadiusCm, setHeadRadiusCm] = useState(8.75);
 
   // --- Distance model ---
   const [distanceExponent, setDistanceExponent] = useState(1.0);
@@ -393,6 +399,9 @@ export default function App() {
         // HRTF engine
         setHrtfInterpolate(message.hrtfInterpolate ?? true);
         setItdEnabled(message.itdEnabled ?? true);
+        setUseSymmetricHrtf(message.useSymmetricHrtf ?? false);
+        setAnalyticModelType(message.analyticModelType ?? "woodworth");
+        setHeadRadiusCm(message.headRadiusCm ?? 8.75);
         // Distance model
         setDistanceExponent(message.distanceExponent ?? 1.0);
         setDistanceMinM(message.distanceMinM ?? 1.0);
@@ -764,6 +773,56 @@ export default function App() {
                     sendToPluginSafe({ type: "SetItdEnabled", value });
                   }}
                 />
+              </div>
+
+              <div className="signal-col">
+                <div className="signal-sublabel">Symmetric Model</div>
+                <ToggleRow
+                  label="Symmetric HRTF"
+                  description="Replace measured azimuthal cues with an analytic head model. Elevation and front-back coloration remain from the SOFA data."
+                  checked={useSymmetricHrtf}
+                  onChange={(value) => {
+                    setUseSymmetricHrtf(value);
+                    sendToPluginSafe({ type: "SetUseSymmetricHrtf", value });
+                  }}
+                />
+                <div className={`control-group${useSymmetricHrtf ? "" : " is-section-disabled"}`}>
+                  <div className="signal-sublabel" style={{ marginTop: 8 }}>ITD / ILD Model</div>
+                  <div className="radio-group">
+                    {(["woodworth", "duda"] as const).map((model) => (
+                      <button
+                        key={model}
+                        className={`radio-row${analyticModelType === model ? " is-selected" : ""}${!useSymmetricHrtf ? " is-disabled" : ""}`}
+                        disabled={!useSymmetricHrtf}
+                        onClick={() => {
+                          setAnalyticModelType(model);
+                          sendToPluginSafe({ type: "SetAnalyticModelType", value: model });
+                        }}
+                      >
+                        <span className="radio-dot" aria-hidden="true"></span>
+                        <span className="radio-label">
+                          {model === "woodworth" ? "Woodworth (1938)" : "Duda & Martens (1998)"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <ControlRow
+                    label="Head Radius"
+                    value={headRadiusCm}
+                    min={7}
+                    max={11}
+                    step={0.05}
+                    unit=" cm"
+                    digits={2}
+                    centerValue={8.75}
+                    disabled={!useSymmetricHrtf}
+                    hint="Average adult head radius ≈ 8.75 cm"
+                    onChange={(value) => {
+                      setHeadRadiusCm(value);
+                      sendToPluginSafe({ type: "SetHeadRadiusCm", value });
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>
