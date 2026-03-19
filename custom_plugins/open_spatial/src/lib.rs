@@ -847,24 +847,24 @@ impl SymmetricHrtfGrid {
 /// Woodworth (1938) spherical-head ITD in seconds.
 /// Returns the delay that should be applied to the *contralateral* ear.
 /// `theta_rad`: signed azimuth — positive = source to the right.
+/// Woodworth (1938) full-sphere ITD.
+/// ITD peaks at ±90° and returns to zero at both 0° (front) and ±180° (rear).
+/// Folding `effective_theta = min(|θ|, π−|θ|)` mirrors the rear hemisphere
+/// onto the equivalent front-hemisphere angle, giving the correct symmetric curve.
 fn woodworth_itd(theta_rad: f32, head_radius_m: f32) -> f32 {
     const SPEED_OF_SOUND: f32 = 343.0;
-    let t = theta_rad.abs().min(std::f32::consts::FRAC_PI_2);
+    let theta = theta_rad.abs().clamp(0.0, std::f32::consts::PI);
+    // Fold rear hemisphere: at π the effective angle is 0, matching the front.
+    let t = theta.min(std::f32::consts::PI - theta);
     (head_radius_m / SPEED_OF_SOUND) * (t + t.sin())
 }
 
-/// Duda & Martens (1998) far-field ITD — same formula, extends correctly
-/// into the rear hemisphere instead of saturating at π/2.
+/// Duda & Martens (1998) far-field ITD.
+/// For far-field (which is all we model here) the formula is identical to
+/// Woodworth. The Duda extension over Woodworth applies only to near-field
+/// (range-dependent) paths, which are not yet implemented.
 fn duda_itd(theta_rad: f32, head_radius_m: f32) -> f32 {
-    const SPEED_OF_SOUND: f32 = 343.0;
-    let theta = theta_rad.abs();
-    let itd = if theta <= std::f32::consts::FRAC_PI_2 {
-        (head_radius_m / SPEED_OF_SOUND) * (theta + theta.sin())
-    } else {
-        // Rear hemisphere: path wraps around the head
-        (head_radius_m / SPEED_OF_SOUND) * (std::f32::consts::FRAC_PI_2 + 1.0 + (theta - std::f32::consts::FRAC_PI_2))
-    };
-    itd
+    woodworth_itd(theta_rad, head_radius_m)
 }
 
 /// Frequency-independent ILD from the Feddersen et al. empirical rule (~6.5 dB/ear at 90°).
