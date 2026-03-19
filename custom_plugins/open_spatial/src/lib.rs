@@ -35,6 +35,18 @@ const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 const HRTF_PARTITION_LEN: usize = 64;
 
 // ---------------------------------------------------------------------------
+// Symmetric HRTF grid constants
+// ---------------------------------------------------------------------------
+
+/// Azimuth grid: 0° to 180° inclusive in 5° steps → 37 points (lateral angle only).
+const GRID_AZ_STEP_DEG: f32 = 5.0;
+const GRID_AZ_COUNT: usize = 37;
+/// Elevation grid: −45° to +90° inclusive in 15° steps → 10 points.
+const GRID_EL_STEP_DEG: f32 = 15.0;
+const GRID_EL_COUNT: usize = 10;
+const GRID_EL_MIN_DEG: f32 = -45.0;
+
+// ---------------------------------------------------------------------------
 // SOFA file definitions — both entries are on the same Zenodo record
 // ---------------------------------------------------------------------------
 
@@ -116,6 +128,18 @@ impl Default for RuntimeInitStatus {
 }
 
 // ---------------------------------------------------------------------------
+// AnalyticModel enum — selects ITD/ILD formula for the symmetric HRTF path
+// ---------------------------------------------------------------------------
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq)]
+enum AnalyticModel {
+    #[id = "woodworth"]
+    Woodworth,
+    #[id = "duda"]
+    Duda,
+}
+
+// ---------------------------------------------------------------------------
 // Parameters
 // ---------------------------------------------------------------------------
 
@@ -154,6 +178,12 @@ struct OpenSpatialParams {
     hrtf_interpolate: BoolParam,
     #[id = "itdenb"]
     itd_enabled: BoolParam,
+    #[id = "symhrt"]
+    use_symmetric_hrtf: BoolParam,
+    #[id = "anlmdl"]
+    analytic_model_type: EnumParam<AnalyticModel>,
+    #[id = "headr0"]
+    head_radius_cm: FloatParam,
 
     // --- Distance model ---
     #[id = "distex"]
@@ -313,6 +343,22 @@ impl Default for OpenSpatialParams {
 
             itd_enabled: BoolParam::new("ITD Delays", true)
                 .with_callback(dirty_cb!(params_dirty)),
+
+            use_symmetric_hrtf: BoolParam::new("Symmetric HRTF", false)
+                .with_callback(dirty_cb!(params_dirty)),
+
+            analytic_model_type: EnumParam::new("Analytic Model", AnalyticModel::Woodworth)
+                .with_callback(dirty_cb!(params_dirty)),
+
+            head_radius_cm: FloatParam::new(
+                "Head Radius",
+                8.75,
+                FloatRange::Linear { min: 7.0, max: 11.0 },
+            )
+            .with_smoother(SmoothingStyle::Linear(20.0))
+            .with_step_size(0.05)
+            .with_unit(" cm")
+            .with_callback(dirty_cb!(params_dirty)),
 
             // --- Distance model ---
             distance_exponent: FloatParam::new(
@@ -721,6 +767,9 @@ struct RenderParams {
     // HRTF engine
     hrtf_interpolate: bool,
     itd_enabled: bool,
+    use_symmetric_hrtf: bool,
+    analytic_model_type: AnalyticModel,
+    head_radius_m: f32,
     // Distance model
     distance_exponent: f32,
     distance_min_m: f32,
@@ -737,6 +786,98 @@ struct RenderParams {
 }
 
 // ---------------------------------------------------------------------------
+// SymmetricHrtfGrid — precomputed at SOFA load time, always available
+// ---------------------------------------------------------------------------
+
+/// Holds a 2-D grid of common (ILD-free, left-right symmetric) HRIRs.
+/// Each cell contains a single FIR of length `filter_len` that represents the
+/// spectral coloration at that (lateral azimuth, elevation) position after
+/// mirror-averaging the SOFA measurements.
+struct SymmetricHrtfGrid {
+    /// [az_idx][el_idx][tap] — shape [GRID_AZ_COUNT][GRID_EL_COUNT][filter_len]
+    filters: Vec<Vec<Vec<f32>>>,
+    filter_len: usize,
+}
+
+impl SymmetricHrtfGrid {
+    fn az_for_idx(i: usize) -> f32 {
+        i as f32 * GRID_AZ_STEP_DEG
+    }
+    fn el_for_idx(j: usize) -> f32 {
+        GRID_EL_MIN_DEG + j as f32 * GRID_EL_STEP_DEG
+    }
+
+    /// Look up and bilinearly interpolate the common FIR for an arbitrary
+    /// (lateral_az_deg, el_deg). `lateral_az_deg` is the *absolute* azimuth (0–180°).
+    fn get_filter(&self, lateral_az_deg: f32, el_deg: f32) -> Vec<f32> {
+        let az = lateral_az_deg.clamp(0.0, 180.0);
+        let el = el_deg.clamp(GRID_EL_MIN_DEG, GRID_EL_MIN_DEG + (GRID_EL_COUNT - 1) as f32 * GRID_EL_STEP_DEG);
+
+        let az_f = az / GRID_AZ_STEP_DEG;
+        let el_f = (el - GRID_EL_MIN_DEG) / GRID_EL_STEP_DEG;
+
+        let az0 = (az_f.floor() as usize).min(GRID_AZ_COUNT - 1);
+        let az1 = (az0 + 1).min(GRID_AZ_COUNT - 1);
+        let el0 = (el_f.floor() as usize).min(GRID_EL_COUNT - 1);
+        let el1 = (el0 + 1).min(GRID_EL_COUNT - 1);
+
+        let ta = az_f.fract();
+        let te = el_f.fract();
+
+        let flen = self.filter_len;
+        let mut out = vec![0.0f32; flen];
+        for n in 0..flen {
+            let f00 = self.filters[az0][el0][n];
+            let f10 = self.filters[az1][el0][n];
+            let f01 = self.filters[az0][el1][n];
+            let f11 = self.filters[az1][el1][n];
+            out[n] = f00 * (1.0 - ta) * (1.0 - te)
+                + f10 * ta * (1.0 - te)
+                + f01 * (1.0 - ta) * te
+                + f11 * ta * te;
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Analytic ITD / ILD models
+// ---------------------------------------------------------------------------
+
+/// Woodworth (1938) spherical-head ITD in seconds.
+/// Returns the delay that should be applied to the *contralateral* ear.
+/// `theta_rad`: signed azimuth — positive = source to the right.
+fn woodworth_itd(theta_rad: f32, head_radius_m: f32) -> f32 {
+    const SPEED_OF_SOUND: f32 = 343.0;
+    let t = theta_rad.abs().min(std::f32::consts::FRAC_PI_2);
+    (head_radius_m / SPEED_OF_SOUND) * (t + t.sin())
+}
+
+/// Duda & Martens (1998) far-field ITD — same formula, extends correctly
+/// into the rear hemisphere instead of saturating at π/2.
+fn duda_itd(theta_rad: f32, head_radius_m: f32) -> f32 {
+    const SPEED_OF_SOUND: f32 = 343.0;
+    let theta = theta_rad.abs();
+    let itd = if theta <= std::f32::consts::FRAC_PI_2 {
+        (head_radius_m / SPEED_OF_SOUND) * (theta + theta.sin())
+    } else {
+        // Rear hemisphere: path wraps around the head
+        (head_radius_m / SPEED_OF_SOUND) * (std::f32::consts::FRAC_PI_2 + 1.0 + (theta - std::f32::consts::FRAC_PI_2))
+    };
+    itd
+}
+
+/// Frequency-independent ILD from the Feddersen et al. empirical rule (~6.5 dB/ear at 90°).
+/// Returns (left_linear_gain, right_linear_gain).
+/// Positive `theta_rad` = source to the right → right ear is louder.
+fn analytic_ild_gains(theta_rad: f32) -> (f32, f32) {
+    let ild_half_db = 3.25 * theta_rad.sin(); // ±half of total ILD on each ear
+    let left_gain = util::db_to_gain_fast(-ild_half_db);
+    let right_gain = util::db_to_gain_fast(ild_half_db);
+    (left_gain, right_gain)
+}
+
+// ---------------------------------------------------------------------------
 // HrtfEngine
 // ---------------------------------------------------------------------------
 
@@ -744,6 +885,9 @@ struct HrtfEngine {
     sofa: Sofar,
     filter: Filter,
     renderer: Renderer,
+    /// Separate renderer for the symmetric HRTF path (both channels get the same filter).
+    sym_renderer: Renderer,
+    sym_grid: SymmetricHrtfGrid,
     sample_rate: f32,
     pinna_filter: BiquadFilter,
     reverb: Reverb,
@@ -768,12 +912,60 @@ impl HrtfEngine {
             .open(path)
             .map_err(|err| format!("Failed to open SOFA file: {err}"))?;
 
-        let filter = Filter::new(sofa.filter_len());
-        let renderer = Renderer::builder(sofa.filter_len())
+        let filter_len = sofa.filter_len();
+        let filter = Filter::new(filter_len);
+        let renderer = Renderer::builder(filter_len)
             .with_sample_rate(sample_rate)
             .with_partition_len(HRTF_PARTITION_LEN)
             .build()
             .map_err(|err| format!("Failed to build HRTF renderer: {err}"))?;
+
+        let sym_renderer = Renderer::builder(filter_len)
+            .with_sample_rate(sample_rate)
+            .with_partition_len(HRTF_PARTITION_LEN)
+            .build()
+            .map_err(|err| format!("Failed to build symmetric HRTF renderer: {err}"))?;
+
+        // Precompute the symmetric HRTF grid.
+        // For each grid point (lateral_az, el) we query the SOFA at +az and -az,
+        // mirror-average the four FIR taps, and store the common (ILD-free) filter.
+        let mut grid_filters =
+            vec![vec![vec![0.0f32; filter_len]; GRID_EL_COUNT]; GRID_AZ_COUNT];
+        let mut tmp_fwd = Filter::new(filter_len);
+        let mut tmp_rev = Filter::new(filter_len);
+
+        for ai in 0..GRID_AZ_COUNT {
+            let az_deg = SymmetricHrtfGrid::az_for_idx(ai);
+            let az_rad = az_deg.to_radians();
+            for ei in 0..GRID_EL_COUNT {
+                let el_deg = SymmetricHrtfGrid::el_for_idx(ei);
+                let el_rad = el_deg.to_radians();
+
+                // Cartesian for libmysofa: +X = front, +Y = listener-left, +Z = up.
+                // Plugin convention: +Y = listener-right, so we negate Y when calling.
+                // Positive az in plugin = source to the right → Y_plugin > 0 → pass -Y_plugin.
+                let horiz = el_rad.cos();
+                let px = horiz * az_rad.cos();
+                let py_plugin = horiz * az_rad.sin(); // positive = right in plugin space
+
+                // +az: source to the right
+                sofa.filter(px, -py_plugin, el_rad.sin(), &mut tmp_fwd);
+                // -az: source to the left (mirror)
+                sofa.filter(px, py_plugin, el_rad.sin(), &mut tmp_rev);
+
+                // Mirror-average then common-component extraction:
+                //   L_sym = avg of (L@+az, R@-az) — what the left ear would hear symmetrically
+                //   R_sym = avg of (R@+az, L@-az) — what the right ear would hear symmetrically
+                //   common = avg of (L_sym, R_sym) — ILD-free coloration filter
+                for n in 0..filter_len {
+                    let l_sym = 0.5 * (tmp_fwd.left[n] + tmp_rev.right[n]);
+                    let r_sym = 0.5 * (tmp_fwd.right[n] + tmp_rev.left[n]);
+                    grid_filters[ai][ei][n] = 0.5 * (l_sym + r_sym);
+                }
+            }
+        }
+
+        let sym_grid = SymmetricHrtfGrid { filters: grid_filters, filter_len };
 
         // Default pinna filter; coefficients are refreshed every block.
         let pinna_filter = BiquadFilter::new_peaking_eq(sample_rate, 8000.0, 4.0, 0.88);
@@ -782,6 +974,8 @@ impl HrtfEngine {
             sofa,
             filter,
             renderer,
+            sym_renderer,
+            sym_grid,
             sample_rate,
             pinna_filter,
             reverb: Reverb::new(sample_rate),
@@ -874,44 +1068,124 @@ impl HrtfEngine {
         // --- HRTF convolution ---
         // SOFA/libmysofa: +X = front, +Y = listener-left, +Z = up.
         // Plugin: +X = front, +Y = listener-right → negate Y.
-        if rp.hrtf_interpolate {
-            self.sofa.filter(sofa_x, -sofa_y, sofa_z, &mut self.filter);
-        } else {
-            self.sofa.filter_nointerp(sofa_x, -sofa_y, sofa_z, &mut self.filter);
-        }
-        self.renderer
-            .set_filter(&self.filter)
-            .map_err(|err| format!("Failed to update HRTF renderer filter: {err}"))?;
+        if rp.use_symmetric_hrtf {
+            // ---------------------------------------------------------------
+            // Symmetric path: look up common (ILD-free) FIR from the grid,
+            // apply it identically to both channels, then add analytic ITD
+            // and ILD from the selected model.
+            // ---------------------------------------------------------------
 
-        self.pending_input.extend_from_slice(&self.mono_input);
+            // Recover signed azimuth and elevation from the Cartesian pose.
+            // sofa_x/sofa_y are in plugin space (+Y = right).
+            let az_signed_rad = sofa_y.atan2(sofa_x); // positive = source to the right
+            let lateral_az_deg = az_signed_rad.abs().to_degrees();
+            let el_deg = (sofa_z / effective_distance).asin().to_degrees();
 
-        while self.pending_input.len() >= HRTF_PARTITION_LEN {
-            self.chunk_input.copy_from_slice(&self.pending_input[..HRTF_PARTITION_LEN]);
-            self.pending_input.drain(..HRTF_PARTITION_LEN);
+            let common_fir = self.sym_grid.get_filter(lateral_az_deg, el_deg);
 
-            self.renderer
-                .process_block(
-                    &self.chunk_input,
-                    &mut self.chunk_output_left,
-                    &mut self.chunk_output_right,
-                )
-                .map_err(|err| format!("Failed to process HRTF block: {err}"))?;
+            // Both ears get the identical common filter — no ILD from the FIR.
+            self.filter.left.copy_from_slice(&common_fir);
+            self.filter.right.copy_from_slice(&common_fir);
+            self.filter.ldelay = 0.0;
+            self.filter.rdelay = 0.0;
+            self.sym_renderer
+                .set_filter(&self.filter)
+                .map_err(|err| format!("Failed to update symmetric HRTF renderer filter: {err}"))?;
 
-            // ITD: apply integer-sample ITD delays from the SOFA filter.
-            // FIX: use round() instead of truncation (floor) for accurate ITD.
-            if rp.itd_enabled {
-                self.left_delay.set_delay_samples(
-                    (self.filter.ldelay * self.sample_rate).round() as usize,
-                );
-                self.right_delay.set_delay_samples(
-                    (self.filter.rdelay * self.sample_rate).round() as usize,
-                );
+            // Analytic ITD: contralateral ear is delayed.
+            // Positive az = source right → left ear (contralateral) gets the delay.
+            let itd = if rp.itd_enabled {
+                match rp.analytic_model_type {
+                    AnalyticModel::Woodworth => woodworth_itd(az_signed_rad, rp.head_radius_m),
+                    AnalyticModel::Duda => duda_itd(az_signed_rad, rp.head_radius_m),
+                }
+            } else {
+                0.0
+            };
+            let itd_samples = (itd * self.sample_rate).round() as usize;
+            let (l_delay_samples, r_delay_samples) = if az_signed_rad >= 0.0 {
+                (itd_samples, 0) // source right → left ear is contralateral
+            } else {
+                (0, itd_samples) // source left  → right ear is contralateral
+            };
+
+            // Analytic ILD: frequency-independent gain split.
+            let (ild_l, ild_r) = analytic_ild_gains(az_signed_rad);
+
+            self.pending_input.extend_from_slice(&self.mono_input);
+
+            while self.pending_input.len() >= HRTF_PARTITION_LEN {
+                self.chunk_input.copy_from_slice(&self.pending_input[..HRTF_PARTITION_LEN]);
+                self.pending_input.drain(..HRTF_PARTITION_LEN);
+
+                self.sym_renderer
+                    .process_block(
+                        &self.chunk_input,
+                        &mut self.chunk_output_left,
+                        &mut self.chunk_output_right,
+                    )
+                    .map_err(|err| format!("Failed to process symmetric HRTF block: {err}"))?;
+
+                // Apply analytic ITD delays.
+                self.left_delay.set_delay_samples(l_delay_samples);
+                self.right_delay.set_delay_samples(r_delay_samples);
                 self.left_delay.apply(&mut self.chunk_output_left);
                 self.right_delay.apply(&mut self.chunk_output_right);
-            }
 
-            self.pending_output_left.extend_from_slice(&self.chunk_output_left);
-            self.pending_output_right.extend_from_slice(&self.chunk_output_right);
+                // Apply analytic ILD gains.
+                for s in &mut self.chunk_output_left {
+                    *s *= ild_l;
+                }
+                for s in &mut self.chunk_output_right {
+                    *s *= ild_r;
+                }
+
+                self.pending_output_left.extend_from_slice(&self.chunk_output_left);
+                self.pending_output_right.extend_from_slice(&self.chunk_output_right);
+            }
+        } else {
+            // ---------------------------------------------------------------
+            // Original path: full measured SOFA filter, no modifications.
+            // ---------------------------------------------------------------
+            if rp.hrtf_interpolate {
+                self.sofa.filter(sofa_x, -sofa_y, sofa_z, &mut self.filter);
+            } else {
+                self.sofa.filter_nointerp(sofa_x, -sofa_y, sofa_z, &mut self.filter);
+            }
+            self.renderer
+                .set_filter(&self.filter)
+                .map_err(|err| format!("Failed to update HRTF renderer filter: {err}"))?;
+
+            self.pending_input.extend_from_slice(&self.mono_input);
+
+            while self.pending_input.len() >= HRTF_PARTITION_LEN {
+                self.chunk_input.copy_from_slice(&self.pending_input[..HRTF_PARTITION_LEN]);
+                self.pending_input.drain(..HRTF_PARTITION_LEN);
+
+                self.renderer
+                    .process_block(
+                        &self.chunk_input,
+                        &mut self.chunk_output_left,
+                        &mut self.chunk_output_right,
+                    )
+                    .map_err(|err| format!("Failed to process HRTF block: {err}"))?;
+
+                // ITD: apply integer-sample ITD delays from the SOFA filter.
+                // FIX: use round() instead of truncation (floor) for accurate ITD.
+                if rp.itd_enabled {
+                    self.left_delay.set_delay_samples(
+                        (self.filter.ldelay * self.sample_rate).round() as usize,
+                    );
+                    self.right_delay.set_delay_samples(
+                        (self.filter.rdelay * self.sample_rate).round() as usize,
+                    );
+                    self.left_delay.apply(&mut self.chunk_output_left);
+                    self.right_delay.apply(&mut self.chunk_output_right);
+                }
+
+                self.pending_output_left.extend_from_slice(&self.chunk_output_left);
+                self.pending_output_right.extend_from_slice(&self.chunk_output_right);
+            }
         }
 
         let needed = mono_input.len();
@@ -1039,6 +1313,9 @@ enum Action {
     // HRTF engine
     SetHrtfInterpolate { value: bool },
     SetItdEnabled { value: bool },
+    SetUseSymmetricHrtf { value: bool },
+    SetAnalyticModelType { value: String },
+    SetHeadRadiusCm { value: f32 },
     // Distance model
     SetDistanceExponent { value: f32 },
     SetDistanceMinM { value: f32 },
@@ -1254,6 +1531,9 @@ impl OpenSpatial {
             pinna_q: self.params.pinna_q.value(),
             hrtf_interpolate: self.params.hrtf_interpolate.value(),
             itd_enabled: self.params.itd_enabled.value(),
+            use_symmetric_hrtf: self.params.use_symmetric_hrtf.value(),
+            analytic_model_type: self.params.analytic_model_type.value(),
+            head_radius_m: self.params.head_radius_cm.value() / 100.0,
             distance_exponent: self.params.distance_exponent.value(),
             distance_min_m: self.params.distance_min_m.value(),
             directivity_floor: self.params.directivity_floor.value(),
@@ -1503,6 +1783,17 @@ impl Plugin for OpenSpatial {
                             // --- HRTF engine ---
                             Action::SetHrtfInterpolate { value } => set_bool_parameter(&setter, &params.hrtf_interpolate, value),
                             Action::SetItdEnabled { value } => set_bool_parameter(&setter, &params.itd_enabled, value),
+                            Action::SetUseSymmetricHrtf { value } => set_bool_parameter(&setter, &params.use_symmetric_hrtf, value),
+                            Action::SetAnalyticModelType { value } => {
+                                let model = match value.as_str() {
+                                    "duda" => AnalyticModel::Duda,
+                                    _ => AnalyticModel::Woodworth,
+                                };
+                                setter.begin_set_parameter(&params.analytic_model_type);
+                                setter.set_parameter(&params.analytic_model_type, model);
+                                setter.end_set_parameter(&params.analytic_model_type);
+                            }
+                            Action::SetHeadRadiusCm { value } => set_float_parameter(&setter, &params.head_radius_cm, value),
 
                             // --- Distance ---
                             Action::SetDistanceExponent { value } => set_float_parameter(&setter, &params.distance_exponent, value),
@@ -1940,6 +2231,12 @@ fn send_state_message(
         // HRTF engine
         "hrtfInterpolate": params.hrtf_interpolate.value(),
         "itdEnabled": params.itd_enabled.value(),
+        "useSymmetricHrtf": params.use_symmetric_hrtf.value(),
+        "analyticModelType": match params.analytic_model_type.value() {
+            AnalyticModel::Woodworth => "woodworth",
+            AnalyticModel::Duda => "duda",
+        },
+        "headRadiusCm": params.head_radius_cm.value(),
         // Distance model
         "distanceExponent": params.distance_exponent.value(),
         "distanceMinM": params.distance_min_m.value(),
