@@ -26,6 +26,7 @@ members = [
   "custom_plugins/sine_fold",
   "custom_plugins/tunable_sampler",
   "custom_plugins/open_spatial",
+  "custom_plugins/dispatch",
 ]
 
 [features]

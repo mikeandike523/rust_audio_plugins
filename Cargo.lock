@@ -864,6 +864,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch"
+version = "0.0.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_webview",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

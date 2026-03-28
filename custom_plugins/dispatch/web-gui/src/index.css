@@ -1,0 +1,320 @@
+:root {
+  --bg: #111113;
+  --surface: #1a1a1e;
+  --surface2: #222228;
+  --border: #2e2e36;
+  --text: #e8e8ef;
+  --text-muted: #666680;
+  --accent: #5b6ef5;
+  --accent-dim: #3a4ab0;
+  --pad-bg: #1e1e26;
+  --pad-border: #2e2e3e;
+  --pad-active: #5b6ef5;
+  --pad-active-glow: rgba(91, 110, 245, 0.4);
+  --green: #3ecf8e;
+  --red: #e5534b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── App layout ─────────────────────────────────────────────── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.app-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.app-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--text);
+}
+
+.app-tagline {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.cache-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 420px;
+}
+
+.cache-icon {
+  font-size: 13px;
+}
+
+.cache-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  max-width: 360px;
+}
+
+.cache-clear-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cache-clear-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.cache-missing {
+  color: var(--red);
+  font-size: 11px;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: hidden;
+}
+
+/* ── Pad Grid ───────────────────────────────────────────────── */
+
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  gap: 10px;
+  width: min(640px, 100%);
+  aspect-ratio: 1;
+}
+
+.pad {
+  background: var(--pad-bg);
+  border: 1px solid var(--pad-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: default;
+  transition: border-color 0.06s, background 0.06s, box-shadow 0.06s;
+  position: relative;
+  overflow: hidden;
+}
+
+.pad::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.pad:hover {
+  border-color: #404050;
+  background: #222230;
+}
+
+.pad--active {
+  border-color: var(--pad-active);
+  background: rgba(91, 110, 245, 0.12);
+  box-shadow: 0 0 16px var(--pad-active-glow);
+}
+
+.pad-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.pad-note {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.pad-sample {
+  font-size: 10px;
+  margin-top: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pad-sample--empty {
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.5;
+}
+
+/* ── Footer ─────────────────────────────────────────────────── */
+
+.app-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.conn-dot--on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+.footer-versions {
+  margin-left: auto;
+}
+
+/* ── Cache Dir Setup Overlay ────────────────────────────────── */
+
+.setup-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.88);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.setup-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 36px;
+  width: min(420px, 90%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 32px 64px rgba(0, 0, 0, 0.6);
+}
+
+.setup-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.setup-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.setup-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  font-family: -apple-system, "Segoe UI", sans-serif;
+}
+
+.setup-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--text);
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+.setup-input:focus {
+  border-color: var(--accent);
+}
+
+.setup-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.setup-btn:hover:not(:disabled) {
+  background: #6d7ff6;
+}
+
+.setup-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.setup-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: -apple-system, "Segoe UI", sans-serif;
+}
