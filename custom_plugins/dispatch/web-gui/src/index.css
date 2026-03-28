@@ -254,6 +254,31 @@ body {
   opacity: 0.4;
 }
 
+.pad-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 3px;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+
+.pad:hover .pad-delete-btn {
+  opacity: 1;
+}
+
+.pad-delete-btn:hover {
+  background: var(--red);
+  color: #fff;
+}
+
 .pad-note {
   font-size: 9px;
   color: var(--text-muted);
@@ -326,7 +351,13 @@ body {
   margin: 0;
 }
 
-.mixer-mono-btn {
+.mixer-btns {
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+}
+
+.mixer-btn {
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -338,14 +369,32 @@ body {
   padding: 1px 3px;
   cursor: pointer;
   line-height: 1.4;
-  width: 16px;
+  width: 15px;
   transition: border-color 0.1s, color 0.1s, background 0.1s;
 }
 
-.mixer-mono-btn--on {
+.mixer-btn--on {
   border-color: var(--accent);
   color: var(--accent);
   background: rgba(91, 110, 245, 0.12);
+}
+
+.mixer-master {
+  flex-shrink: 0;
+  width: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+  margin-left: 4px;
+}
+
+.mixer-master .mixer-label {
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0.1em;
 }
 
 .mixer-val {

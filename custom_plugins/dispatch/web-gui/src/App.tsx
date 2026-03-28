@@ -8,12 +8,15 @@ type PluginMessage =
       pluginVersion?: string;
       maxVoices?: number;
       retrigger?: boolean;
+      masterGain?: number;
       padVolumes?: number[];
       padMonos?: boolean[];
+      padNormalizes?: boolean[];
     }
   | { type: "SampleLoaded"; padIndex: number; name: string }
   | { type: "SampleError"; padIndex: number; message: string }
-  | { type: "PadName"; padIndex: number; name: string };
+  | { type: "PadName"; padIndex: number; name: string }
+  | { type: "PadCleared"; padIndex: number };
 
 type PadState = { name: string; loading: boolean } | null;
 
@@ -113,10 +116,12 @@ function PadGrid({
   activePads,
   padStates,
   onSampleDrop,
+  onDeletePad,
 }: {
   activePads: Set<number>;
   padStates: PadState[];
   onSampleDrop: (padIndex: number, file: File) => void;
+  onDeletePad: (padIndex: number) => void;
 }) {
   const [dragOverPad, setDragOverPad] = useState<number | null>(null);
 
@@ -161,6 +166,15 @@ function PadGrid({
               ) : (
                 <span className="pad-label--empty">{i + 1}</span>
               )}
+              {pad && !pad.loading && (
+                <button
+                  className="pad-delete-btn"
+                  onClick={(e) => { e.stopPropagation(); onDeletePad(i); }}
+                  title="Remove sample"
+                >
+                  ×
+                </button>
+              )}
             </div>
             <div className="pad-note">{noteName}</div>
             <div className={`pad-sample ${pad ? "" : "pad-sample--empty"}`}>
@@ -179,17 +193,28 @@ function PadGrid({
 
 function Mixer({
   padStates,
+  masterGain,
   padVolumes,
   padMonos,
+  padNormalizes,
+  onMasterGainChange,
   onVolumeChange,
   onMonoChange,
+  onNormalizeChange,
 }: {
   padStates: PadState[];
+  masterGain: number;
   padVolumes: number[];
   padMonos: boolean[];
+  padNormalizes: boolean[];
+  onMasterGainChange: (gain: number) => void;
   onVolumeChange: (padIndex: number, volume: number) => void;
   onMonoChange: (padIndex: number, mono: boolean) => void;
+  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
 }) {
+  const fmtGain = (db: number) =>
+    db === 0 ? "0 dB" : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+
   return (
     <div className="mixer-section">
       {Array.from({ length: PAD_COUNT }, (_, i) => (
@@ -208,13 +233,22 @@ function Mixer({
               onChange={(e) => onVolumeChange(i, Number(e.target.value))}
             />
           </div>
-          <button
-            className={`mixer-mono-btn${padMonos[i] ? " mixer-mono-btn--on" : ""}`}
-            onClick={() => onMonoChange(i, !padMonos[i])}
-            title="Force mono"
-          >
-            M
-          </button>
+          <div className="mixer-btns">
+            <button
+              className={`mixer-btn${padNormalizes[i] ? " mixer-btn--on" : ""}`}
+              onClick={() => onNormalizeChange(i, !padNormalizes[i])}
+              title="Normalize (pre-scale to peak = 1.0)"
+            >
+              N
+            </button>
+            <button
+              className={`mixer-btn${padMonos[i] ? " mixer-btn--on" : ""}`}
+              onClick={() => onMonoChange(i, !padMonos[i])}
+              title="Force mono"
+            >
+              M
+            </button>
+          </div>
           <span className="mixer-val">
             {padVolumes[i] === 1.0
               ? "0dB"
@@ -224,6 +258,22 @@ function Mixer({
           </span>
         </div>
       ))}
+
+      <div className="mixer-master">
+        <span className="mixer-label">OUT</span>
+        <div className="mixer-fader-wrap">
+          <input
+            type="range"
+            className="mixer-fader"
+            min={-15}
+            max={9}
+            step={0.1}
+            value={masterGain}
+            onChange={(e) => onMasterGainChange(Number(e.target.value))}
+          />
+        </div>
+        <span className="mixer-val">{fmtGain(masterGain)}</span>
+      </div>
     </div>
   );
 }
@@ -240,8 +290,10 @@ export default function App() {
   const [padStates, setPadStates] = useState<PadState[]>(Array(PAD_COUNT).fill(null));
   const [maxVoices, setMaxVoices] = useState<0 | 16 | 32 | 64>(16);
   const [retrigger, setRetrigger] = useState(true);
+  const [masterGain, setMasterGain] = useState(0);
   const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
   const [padMonos, setPadMonos] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
+  const [padNormalizes, setPadNormalizes] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
   const [connected, setConnected] = useState(false);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
@@ -258,8 +310,10 @@ export default function App() {
         if (msg.pluginVersion != null) setPluginVersion(msg.pluginVersion);
         if (msg.maxVoices != null) setMaxVoices(msg.maxVoices as 0 | 16 | 32 | 64);
         if (msg.retrigger != null) setRetrigger(msg.retrigger);
+        if (msg.masterGain != null) setMasterGain(msg.masterGain);
         if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
         if (msg.padMonos != null) setPadMonos(msg.padMonos);
+        if (msg.padNormalizes != null) setPadNormalizes(msg.padNormalizes);
         setConnected(true);
       } else if (msg.type === "SampleLoaded") {
         setPadStates((prev) => {
@@ -277,6 +331,12 @@ export default function App() {
         });
       } else if (msg.type === "SampleError") {
         console.error(`Pad ${msg.padIndex} sample error:`, msg.message);
+        setPadStates((prev) => {
+          const next = [...prev];
+          next[msg.padIndex] = null;
+          return next;
+        });
+      } else if (msg.type === "PadCleared") {
         setPadStates((prev) => {
           const next = [...prev];
           next[msg.padIndex] = null;
@@ -318,6 +378,24 @@ export default function App() {
         return next;
       });
     }
+  };
+
+  const handleMasterGainChange = (gain: number) => {
+    setMasterGain(gain);
+    sendToPluginSafe({ type: "SetMasterGain", gainDb: gain });
+  };
+
+  const handleDeletePad = (padIndex: number) => {
+    sendToPluginSafe({ type: "DeletePad", padIndex });
+  };
+
+  const handlePadNormalizeChange = (padIndex: number, normalize: boolean) => {
+    setPadNormalizes((prev) => {
+      const next = [...prev];
+      next[padIndex] = normalize;
+      return next;
+    });
+    sendToPluginSafe({ type: "SetPadNormalize", padIndex, normalize });
   };
 
   const handlePadMonoChange = (padIndex: number, mono: boolean) => {
@@ -394,10 +472,20 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        <PadGrid activePads={activePads} padStates={padStates} onSampleDrop={handleSampleDrop} />
+        <PadGrid activePads={activePads} padStates={padStates} onSampleDrop={handleSampleDrop} onDeletePad={handleDeletePad} />
       </main>
 
-      <Mixer padStates={padStates} padVolumes={padVolumes} padMonos={padMonos} onVolumeChange={handlePadVolumeChange} onMonoChange={handlePadMonoChange} />
+      <Mixer
+        padStates={padStates}
+        masterGain={masterGain}
+        padVolumes={padVolumes}
+        padMonos={padMonos}
+        padNormalizes={padNormalizes}
+        onMasterGainChange={handleMasterGainChange}
+        onVolumeChange={handlePadVolumeChange}
+        onMonoChange={handlePadMonoChange}
+        onNormalizeChange={handlePadNormalizeChange}
+      />
 
       <footer className="app-footer">
         <span className={`conn-dot ${connected ? "conn-dot--on" : ""}`} />

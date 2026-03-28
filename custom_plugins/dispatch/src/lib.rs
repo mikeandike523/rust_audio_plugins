@@ -30,6 +30,14 @@ struct PadData {
     channels: usize,
     frames: usize,
     data: Vec<f32>,
+    /// Precomputed 1.0 / peak_abs for the normalize feature. Always ≥ 1.0.
+    peak_scale: f32,
+}
+
+/// Compute the normalize scale factor (1.0 / peak) once at load time.
+fn compute_peak_scale(data: &[f32]) -> f32 {
+    let peak = data.iter().copied().fold(0.0f32, |acc, s| acc.max(s.abs()));
+    if peak > 0.0 { 1.0 / peak } else { 1.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +71,7 @@ impl Voice {
 enum UiEvent {
     SampleLoaded { pad_index: usize, name: String },
     SampleError { pad_index: usize, message: String },
+    PadCleared { pad_index: usize },
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +94,10 @@ struct DispatchParams {
     #[persist = "cache_dir"]
     pub cache_dir: Arc<Mutex<Option<String>>>,
 
+    /// Overall output gain in dB, applied after all voices are summed.
+    #[id = "master_gain"]
+    pub master_gain: FloatParam,
+
     /// One channel-strip per pad; IDs become e.g. "vol_1" … "vol_16" in the DAW.
     #[nested(array, group = "Pad")]
     pub pads: [PadChannelParams; PAD_COUNT],
@@ -94,6 +107,12 @@ impl Default for DispatchParams {
     fn default() -> Self {
         Self {
             cache_dir: Arc::new(Mutex::new(None)),
+            master_gain: FloatParam::new(
+                "Master Gain",
+                0.0,
+                FloatRange::Linear { min: -15.0, max: 9.0 },
+            )
+            .with_unit(" dB"),
             pads: std::array::from_fn(|i| PadChannelParams {
                 volume: FloatParam::new(
                     format!("Pad {} Volume", i + 1),
@@ -144,6 +163,19 @@ enum Action {
         #[serde(rename = "padIndex")]
         pad_index: usize,
         mono: bool,
+    },
+    SetPadNormalize {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
+        normalize: bool,
+    },
+    SetMasterGain {
+        #[serde(rename = "gainDb")]
+        gain_db: f32,
+    },
+    DeletePad {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
     },
 }
 
@@ -228,10 +260,12 @@ fn load_resampled(cache_dir: &str, pad_index: usize, project_rate: u32) -> Optio
     for chunk in array_bytes.chunks_exact(4) {
         data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
+    let peak_scale = compute_peak_scale(&data);
     Some(PadData {
         name: meta.name,
         channels: meta.channels as usize,
         frames: meta.frames as usize,
+        peak_scale,
         data,
     })
 }
@@ -337,10 +371,12 @@ fn spawn_pad_resample(
             )
             .map_err(|e| format!("write resampled.json: {e}"))?;
 
+            let peak_scale = compute_peak_scale(&resampled);
             Ok(PadData {
                 name: meta.name,
                 channels: meta.channels as usize,
                 frames: out_frames,
+                peak_scale,
                 data: resampled,
             })
         })();
@@ -369,6 +405,8 @@ fn spawn_pad_resample(
 
 pub struct Dispatch {
     params: Arc<DispatchParams>,
+    /// Per-pad normalize toggle (UI-only, not a DAW param).
+    normalize: Arc<Vec<AtomicBool>>,
 
     voices: Vec<Voice>,
     voice_seq: u64,
@@ -389,6 +427,7 @@ impl Default for Dispatch {
     fn default() -> Self {
         Self {
             params: Arc::new(DispatchParams::default()),
+            normalize: Arc::new((0..PAD_COUNT).map(|_| AtomicBool::new(false)).collect()),
             voices: Vec::new(),
             voice_seq: 0,
             pad_data: Arc::new((0..PAD_COUNT).map(|_| Mutex::new(None)).collect()),
@@ -602,28 +641,40 @@ impl Plugin for Dispatch {
                     continue;
                 }
                 if let Ok(guard) = self.pad_data[v.pad_index].try_lock() {
-                    if let Some(ref data) = *guard {
-                        if v.sample_pos < data.frames {
-                            let fi = v.sample_pos * data.channels;
-                            let vol = self.params.pads[v.pad_index].volume.value();
-                            let gain = v.velocity_gain * vol;
-                            let l_raw = data.data[fi] * gain;
-                            let r_raw = if data.channels > 1 {
-                                data.data[fi + 1] * gain
-                            } else {
-                                l_raw
-                            };
-                            let (l, r) = if self.params.pads[v.pad_index].mono.value() {
-                                let m = (l_raw + r_raw) * 0.5;
-                                (m, m)
-                            } else {
-                                (l_raw, r_raw)
-                            };
-                            out[0] += l;
-                            out[1] += r;
-                            v.sample_pos += 1;
-                        } else {
+                    match *guard {
+                        None => {
+                            // Sample was cleared/deleted — kill the voice immediately.
                             v.active = false;
+                        }
+                        Some(ref data) => {
+                            if v.sample_pos < data.frames {
+                                let fi = v.sample_pos * data.channels;
+                                let vol = self.params.pads[v.pad_index].volume.value();
+                                let norm_scale =
+                                    if self.normalize[v.pad_index].load(Ordering::Relaxed) {
+                                        data.peak_scale
+                                    } else {
+                                        1.0
+                                    };
+                                let gain = v.velocity_gain * vol * norm_scale;
+                                let l_raw = data.data[fi] * gain;
+                                let r_raw = if data.channels > 1 {
+                                    data.data[fi + 1] * gain
+                                } else {
+                                    l_raw
+                                };
+                                let (l, r) = if self.params.pads[v.pad_index].mono.value() {
+                                    let m = (l_raw + r_raw) * 0.5;
+                                    (m, m)
+                                } else {
+                                    (l_raw, r_raw)
+                                };
+                                out[0] += l;
+                                out[1] += r;
+                                v.sample_pos += 1;
+                            } else {
+                                v.active = false;
+                            }
                         }
                     }
                 }
@@ -635,6 +686,17 @@ impl Plugin for Dispatch {
             }
             if let Some(s) = ch.next() {
                 *s = out[1];
+            }
+        }
+
+        // Apply master gain (computed once per buffer, not per sample).
+        let master_db = self.params.master_gain.value();
+        if master_db != 0.0 {
+            let master_lin = 10.0f32.powf(master_db / 20.0);
+            for channel_samples in buffer.iter_samples() {
+                for sample in channel_samples {
+                    *sample *= master_lin;
+                }
             }
         }
 
@@ -654,6 +716,7 @@ impl Plugin for Dispatch {
         let sample_rate_changed = self.sample_rate_changed.clone();
         let max_voices = self.max_voices.clone();
         let retrigger = self.retrigger.clone();
+        let normalize = self.normalize.clone();
         let ui_events = self.ui_events.clone();
         let ui_events_dirty = self.ui_events_dirty.clone();
         let resample_in_progress = self.resample_in_progress.clone();
@@ -683,6 +746,9 @@ impl Plugin for Dispatch {
                             let pad_monos: Vec<bool> = (0..PAD_COUNT)
                                 .map(|i| params.pads[i].mono.value())
                                 .collect();
+                            let pad_normalizes: Vec<bool> = (0..PAD_COUNT)
+                                .map(|i| normalize[i].load(Ordering::Relaxed))
+                                .collect();
                             ctx.send_json(json!({
                                 "type": "State",
                                 "cacheDir": cache_dir,
@@ -690,8 +756,10 @@ impl Plugin for Dispatch {
                                 "pluginVersion": env!("CARGO_PKG_VERSION"),
                                 "maxVoices": max_voices.load(Ordering::Relaxed),
                                 "retrigger": retrigger.load(Ordering::Relaxed),
+                                "masterGain": params.master_gain.value(),
                                 "padVolumes": pad_vols,
                                 "padMonos": pad_monos,
+                                "padNormalizes": pad_normalizes,
                             }));
 
                             if let Some(ref cd) = cache_dir {
@@ -827,6 +895,7 @@ impl Plugin for Dispatch {
                             let pr = project_sample_rate.load(Ordering::Relaxed);
                             if pr > 0 && sample_rate == pr {
                                 *pad_data[pad_index].lock().unwrap() = Some(PadData {
+                                    peak_scale: compute_peak_scale(&raw),
                                     name: name.clone(),
                                     channels: channels as usize,
                                     frames: frames as usize,
@@ -881,6 +950,47 @@ impl Plugin for Dispatch {
                                 setter.end_set_parameter(&params.pads[pad_index].mono);
                             }
                         }
+
+                        Action::SetPadNormalize { pad_index, normalize: norm } => {
+                            if pad_index < PAD_COUNT {
+                                normalize[pad_index].store(norm, Ordering::Relaxed);
+                            }
+                        }
+
+                        Action::SetMasterGain { gain_db } => {
+                            let clamped = gain_db.clamp(-15.0, 9.0);
+                            setter.begin_set_parameter(&params.master_gain);
+                            setter.set_parameter(&params.master_gain, clamped);
+                            setter.end_set_parameter(&params.master_gain);
+                        }
+
+                        Action::DeletePad { pad_index } => {
+                            if pad_index < PAD_COUNT {
+                                // Clear in-memory data first so the voice loop silences it.
+                                *pad_data[pad_index].lock().unwrap() = None;
+
+                                // Delete cached files. If a resample thread is mid-flight it
+                                // will fail to read the now-missing files and push a SampleError,
+                                // which the UI handles by clearing the pad state.
+                                let cd = params.cache_dir.lock().unwrap().clone();
+                                if let Some(ref cd) = cd {
+                                    let dir = pad_dir(cd, pad_index);
+                                    for file in &[
+                                        "sample.json",
+                                        "sample.array",
+                                        "resampled.json",
+                                        "resampled.array",
+                                    ] {
+                                        let _ = std::fs::remove_file(dir.join(file));
+                                    }
+                                }
+
+                                ctx.send_json(json!({
+                                    "type": "PadCleared",
+                                    "padIndex": pad_index,
+                                }));
+                            }
+                        }
                     }
                 }
 
@@ -933,6 +1043,12 @@ impl Plugin for Dispatch {
                                     "type": "SampleError",
                                     "padIndex": pad_index,
                                     "message": message,
+                                }));
+                            }
+                            UiEvent::PadCleared { pad_index } => {
+                                ctx.send_json(json!({
+                                    "type": "PadCleared",
+                                    "padIndex": pad_index,
                                 }));
                             }
                         }
