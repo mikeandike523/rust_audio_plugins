@@ -15,53 +15,11 @@ const GUI_PUBLISHED_URL: &str = "https://dispatch-web-gui.vercel.app";
 
 const PAD_COUNT: usize = 16;
 const PAD_MIDI_BASE: u8 = 36;
+/// Maximum voice slots used in finite polyphony modes.
 const MAX_VOICES: usize = 64;
+/// Capacity pre-allocated for infinite polyphony to reduce runtime heap allocations.
+const INFINITE_POLY_PREALLOCATE: usize = 128;
 const RESAMPLE_POINTS: usize = 64;
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct Config {
-    cache_dir: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self { cache_dir: None }
-    }
-}
-
-fn config_file_path() -> Option<PathBuf> {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var("APPDATA").ok().map(PathBuf::from)
-    } else {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| PathBuf::from(h).join(".config"))
-    };
-    base.map(|b| b.join("dispatch").join("config.json"))
-}
-
-fn load_config() -> Config {
-    config_file_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_config(config: &Config) {
-    let Some(path) = config_file_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write(&path, json);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // In-memory pad audio (at project sample rate)
@@ -111,12 +69,40 @@ enum UiEvent {
 // Params
 // ---------------------------------------------------------------------------
 
+/// Per-pad automatable parameters.
 #[derive(Params)]
-struct DispatchParams {}
+struct PadChannelParams {
+    #[id = "vol"]
+    pub volume: FloatParam,
+    /// When true, L and R are averaged before output (stereo → mono).
+    #[id = "mono"]
+    pub mono: BoolParam,
+}
+
+#[derive(Params)]
+struct DispatchParams {
+    /// Per-instance cache directory, persisted by the DAW in the project file.
+    #[persist = "cache_dir"]
+    pub cache_dir: Arc<Mutex<Option<String>>>,
+
+    /// One channel-strip per pad; IDs become e.g. "vol_1" … "vol_16" in the DAW.
+    #[nested(array, group = "Pad")]
+    pub pads: [PadChannelParams; PAD_COUNT],
+}
 
 impl Default for DispatchParams {
     fn default() -> Self {
-        Self {}
+        Self {
+            cache_dir: Arc::new(Mutex::new(None)),
+            pads: std::array::from_fn(|i| PadChannelParams {
+                volume: FloatParam::new(
+                    format!("Pad {} Volume", i + 1),
+                    1.0,
+                    FloatRange::Linear { min: 0.0, max: 2.0 },
+                ),
+                mono: BoolParam::new(format!("Pad {} Mono", i + 1), false),
+            }),
+        }
     }
 }
 
@@ -148,6 +134,16 @@ enum Action {
     },
     SetRetrigger {
         enabled: bool,
+    },
+    SetPadVolume {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
+        volume: f32,
+    },
+    SetPadMono {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
+        mono: bool,
     },
 }
 
@@ -373,7 +369,6 @@ fn spawn_pad_resample(
 
 pub struct Dispatch {
     params: Arc<DispatchParams>,
-    config: Arc<Mutex<Config>>,
 
     voices: Vec<Voice>,
     voice_seq: u64,
@@ -394,7 +389,6 @@ impl Default for Dispatch {
     fn default() -> Self {
         Self {
             params: Arc::new(DispatchParams::default()),
-            config: Arc::new(Mutex::new(load_config())),
             voices: Vec::new(),
             voice_seq: 0,
             pad_data: Arc::new((0..PAD_COUNT).map(|_| Mutex::new(None)).collect()),
@@ -413,10 +407,38 @@ impl Default for Dispatch {
 
 impl Dispatch {
     fn trigger_pad(&mut self, pad_index: usize, velocity: f32) {
-        let max_v = (self.max_voices.load(Ordering::Relaxed) as usize).min(MAX_VOICES);
+        let max_v_raw = self.max_voices.load(Ordering::Relaxed) as usize;
         let retrigger = self.retrigger.load(Ordering::Relaxed);
 
+        // ── Infinite polyphony (max_voices == 0) ─────────────────────────────
+        if max_v_raw == 0 {
+            if retrigger {
+                // Retrigger: restart the existing voice for this pad if one is active.
+                if let Some(v) = self.voices.iter_mut().find(|v| v.active && v.pad_index == pad_index) {
+                    v.sample_pos = 0;
+                    v.velocity_gain = velocity;
+                    v.seq = self.voice_seq;
+                    self.voice_seq += 1;
+                    return;
+                }
+            }
+            // No stealing — push a new voice; Vec grows if capacity is exhausted.
+            self.voices.push(Voice {
+                active: true,
+                pad_index,
+                sample_pos: 0,
+                velocity_gain: velocity,
+                seq: self.voice_seq,
+            });
+            self.voice_seq += 1;
+            return;
+        }
+
+        // ── Finite polyphony ─────────────────────────────────────────────────
+        let max_v = max_v_raw.min(MAX_VOICES);
+
         if retrigger {
+            // Retrigger: restart the existing voice for this pad.
             if let Some(v) = self.voices[..max_v]
                 .iter_mut()
                 .find(|v| v.active && v.pad_index == pad_index)
@@ -429,21 +451,18 @@ impl Dispatch {
             }
         }
 
-        let active_count = self.voices[..max_v].iter().filter(|v| v.active).count();
-        let slot = if active_count < max_v {
-            self.voices[..max_v]
-                .iter()
-                .position(|v| !v.active)
-                .unwrap_or(0)
-        } else {
-            self.voices[..max_v]
-                .iter()
-                .enumerate()
-                .filter(|(_, v)| v.active)
-                .min_by_key(|(_, v)| v.seq)
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        };
+        // Free slot → use it; otherwise steal the oldest voice (lowest seq).
+        let slot = self.voices[..max_v]
+            .iter()
+            .position(|v| !v.active)
+            .unwrap_or_else(|| {
+                self.voices[..max_v]
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, v)| v.seq)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0)
+            });
 
         self.voices[slot] = Voice {
             active: true,
@@ -513,11 +532,18 @@ impl Plugin for Dispatch {
         let sr = buffer_config.sample_rate.round() as u32;
         self.project_sample_rate.store(sr, Ordering::Relaxed);
         self.sample_rate_changed.store(true, Ordering::Relaxed);
+        // Pre-allocate enough capacity for both finite slots and a burst of infinite voices
+        // so that push() in infinite mode rarely triggers a heap reallocation.
+        self.voices.clear();
+        self.voices.reserve(INFINITE_POLY_PREALLOCATE.max(MAX_VOICES));
         self.voices.resize_with(MAX_VOICES, Voice::idle);
         true
     }
 
     fn reset(&mut self) {
+        // Truncate any voices pushed beyond MAX_VOICES by infinite polyphony mode,
+        // then silence the finite slots.
+        self.voices.truncate(MAX_VOICES);
         for v in &mut self.voices {
             v.active = false;
         }
@@ -539,6 +565,20 @@ impl Plugin for Dispatch {
         while let Some(e) = context.next_event() {
             events.push(e);
         }
+        // nih-plug delivers events in time order, but within the same tick the host
+        // ordering is undefined. Sort so NoteOff/velocity-0 always precedes NoteOn
+        // at identical timestamps — this ensures a "release + retrigger at the same
+        // tick" pair is always processed correctly.
+        events.sort_by(|a, b| {
+            a.timing().cmp(&b.timing()).then_with(|| {
+                let off_first = |e: &NoteEvent<()>| match e {
+                    NoteEvent::NoteOff { .. } => 0u8,
+                    NoteEvent::NoteOn { velocity, .. } if *velocity == 0.0 => 0,
+                    _ => 1,
+                };
+                off_first(a).cmp(&off_first(b))
+            })
+        });
 
         for (sample_id, channels) in buffer.iter_samples().enumerate() {
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -565,11 +605,19 @@ impl Plugin for Dispatch {
                     if let Some(ref data) = *guard {
                         if v.sample_pos < data.frames {
                             let fi = v.sample_pos * data.channels;
-                            let l = data.data[fi] * v.velocity_gain;
-                            let r = if data.channels > 1 {
-                                data.data[fi + 1] * v.velocity_gain
+                            let vol = self.params.pads[v.pad_index].volume.value();
+                            let gain = v.velocity_gain * vol;
+                            let l_raw = data.data[fi] * gain;
+                            let r_raw = if data.channels > 1 {
+                                data.data[fi + 1] * gain
                             } else {
-                                l
+                                l_raw
+                            };
+                            let (l, r) = if self.params.pads[v.pad_index].mono.value() {
+                                let m = (l_raw + r_raw) * 0.5;
+                                (m, m)
+                            } else {
+                                (l_raw, r_raw)
                             };
                             out[0] += l;
                             out[1] += r;
@@ -590,11 +638,17 @@ impl Plugin for Dispatch {
             }
         }
 
+        // In infinite polyphony mode, reclaim slots for finished voices.
+        // Vec::retain never increases capacity, so this is allocation-free as long as
+        // the pre-allocated capacity covers the number of concurrent voices.
+        if self.max_voices.load(Ordering::Relaxed) == 0 {
+            self.voices.retain(|v| v.active);
+        }
+
         ProcessStatus::Normal
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let config = self.config.clone();
         let pad_data = self.pad_data.clone();
         let project_sample_rate = self.project_sample_rate.clone();
         let sample_rate_changed = self.sample_rate_changed.clone();
@@ -603,12 +657,13 @@ impl Plugin for Dispatch {
         let ui_events = self.ui_events.clone();
         let ui_events_dirty = self.ui_events_dirty.clone();
         let resample_in_progress = self.resample_in_progress.clone();
+        let params = self.params.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
-            .with_event_loop(move |ctx, _setter, _window| {
+            .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     let action = match serde_json::from_value::<Action>(value) {
                         Ok(a) => a,
@@ -620,10 +675,14 @@ impl Plugin for Dispatch {
 
                     match action {
                         Action::Init => {
-                            let (cache_dir, needs_cache_dir) = {
-                                let cfg = config.lock().unwrap();
-                                (cfg.cache_dir.clone(), cfg.cache_dir.is_none())
-                            };
+                            let cache_dir = params.cache_dir.lock().unwrap().clone();
+                            let needs_cache_dir = cache_dir.is_none();
+                            let pad_vols: Vec<f32> = (0..PAD_COUNT)
+                                .map(|i| params.pads[i].volume.value())
+                                .collect();
+                            let pad_monos: Vec<bool> = (0..PAD_COUNT)
+                                .map(|i| params.pads[i].mono.value())
+                                .collect();
                             ctx.send_json(json!({
                                 "type": "State",
                                 "cacheDir": cache_dir,
@@ -631,6 +690,8 @@ impl Plugin for Dispatch {
                                 "pluginVersion": env!("CARGO_PKG_VERSION"),
                                 "maxVoices": max_voices.load(Ordering::Relaxed),
                                 "retrigger": retrigger.load(Ordering::Relaxed),
+                                "padVolumes": pad_vols,
+                                "padMonos": pad_monos,
                             }));
 
                             if let Some(ref cd) = cache_dir {
@@ -674,22 +735,16 @@ impl Plugin for Dispatch {
                         }
 
                         Action::SetCacheDir { path } => {
-                            let mut cfg = config.lock().unwrap();
-                            cfg.cache_dir = Some(path);
-                            save_config(&cfg);
+                            *params.cache_dir.lock().unwrap() = Some(path.clone());
                             ctx.send_json(json!({
                                 "type": "State",
-                                "cacheDir": cfg.cache_dir,
+                                "cacheDir": path,
                                 "needsCacheDir": false,
                             }));
                         }
 
                         Action::ClearCacheDir => {
-                            {
-                                let mut cfg = config.lock().unwrap();
-                                cfg.cache_dir = None;
-                                save_config(&cfg);
-                            }
+                            *params.cache_dir.lock().unwrap() = None;
                             for slot in pad_data.iter() {
                                 *slot.lock().unwrap() = None;
                             }
@@ -742,7 +797,7 @@ impl Plugin for Dispatch {
                                 ]));
                             }
 
-                            let cache_dir = config.lock().unwrap().cache_dir.clone();
+                            let cache_dir = params.cache_dir.lock().unwrap().clone();
                             let Some(ref cd) = cache_dir else {
                                 ctx.send_json(json!({
                                     "type": "SampleError",
@@ -799,7 +854,8 @@ impl Plugin for Dispatch {
                         }
 
                         Action::SetPolyphony { voices } => {
-                            let clamped = voices.clamp(1, MAX_VOICES as u32);
+                            // 0 = infinite polyphony; any other value clamped to 1..=MAX_VOICES.
+                            let clamped = if voices == 0 { 0 } else { voices.clamp(1, MAX_VOICES as u32) };
                             max_voices.store(clamped, Ordering::Relaxed);
                             ctx.send_json(json!({ "type": "State", "maxVoices": clamped }));
                         }
@@ -808,6 +864,23 @@ impl Plugin for Dispatch {
                             retrigger.store(enabled, Ordering::Relaxed);
                             ctx.send_json(json!({ "type": "State", "retrigger": enabled }));
                         }
+
+                        Action::SetPadVolume { pad_index, volume } => {
+                            if pad_index < PAD_COUNT {
+                                let clamped = volume.clamp(0.0, 2.0);
+                                setter.begin_set_parameter(&params.pads[pad_index].volume);
+                                setter.set_parameter(&params.pads[pad_index].volume, clamped);
+                                setter.end_set_parameter(&params.pads[pad_index].volume);
+                            }
+                        }
+
+                        Action::SetPadMono { pad_index, mono } => {
+                            if pad_index < PAD_COUNT {
+                                setter.begin_set_parameter(&params.pads[pad_index].mono);
+                                setter.set_parameter(&params.pads[pad_index].mono, mono);
+                                setter.end_set_parameter(&params.pads[pad_index].mono);
+                            }
+                        }
                     }
                 }
 
@@ -815,7 +888,7 @@ impl Plugin for Dispatch {
                 if sample_rate_changed.swap(false, Ordering::Relaxed) {
                     let new_rate = project_sample_rate.load(Ordering::Relaxed);
                     if new_rate > 0 {
-                        let cd = config.lock().unwrap().cache_dir.clone();
+                        let cd = params.cache_dir.lock().unwrap().clone();
                         if let Some(ref cd) = cd {
                             for pad_idx in 0..PAD_COUNT {
                                 if load_raw_meta(cd, pad_idx).is_none() {

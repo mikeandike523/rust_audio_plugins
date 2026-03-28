@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
 type PluginMessage =
-  | { type: "State"; cacheDir: string | null; needsCacheDir: boolean; pluginVersion?: string; maxVoices?: number; retrigger?: boolean }
+  | {
+      type: "State";
+      cacheDir?: string | null;
+      needsCacheDir?: boolean;
+      pluginVersion?: string;
+      maxVoices?: number;
+      retrigger?: boolean;
+      padVolumes?: number[];
+      padMonos?: boolean[];
+    }
   | { type: "SampleLoaded"; padIndex: number; name: string }
   | { type: "SampleError"; padIndex: number; message: string }
   | { type: "PadName"; padIndex: number; name: string };
@@ -165,6 +174,61 @@ function PadGrid({
 }
 
 // ---------------------------------------------------------------------------
+// Mixer
+// ---------------------------------------------------------------------------
+
+function Mixer({
+  padStates,
+  padVolumes,
+  padMonos,
+  onVolumeChange,
+  onMonoChange,
+}: {
+  padStates: PadState[];
+  padVolumes: number[];
+  padMonos: boolean[];
+  onVolumeChange: (padIndex: number, volume: number) => void;
+  onMonoChange: (padIndex: number, mono: boolean) => void;
+}) {
+  return (
+    <div className="mixer-section">
+      {Array.from({ length: PAD_COUNT }, (_, i) => (
+        <div key={i} className="mixer-channel">
+          <span className="mixer-label">
+            {padStates[i]?.name ?? String(i + 1)}
+          </span>
+          <div className="mixer-fader-wrap">
+            <input
+              type="range"
+              className="mixer-fader"
+              min={0}
+              max={2}
+              step={0.01}
+              value={padVolumes[i]}
+              onChange={(e) => onVolumeChange(i, Number(e.target.value))}
+            />
+          </div>
+          <button
+            className={`mixer-mono-btn${padMonos[i] ? " mixer-mono-btn--on" : ""}`}
+            onClick={() => onMonoChange(i, !padMonos[i])}
+            title="Force mono"
+          >
+            M
+          </button>
+          <span className="mixer-val">
+            {padVolumes[i] === 1.0
+              ? "0dB"
+              : padVolumes[i] === 0
+              ? "−∞"
+              : `${((padVolumes[i] - 1) * 100).toFixed(0)}%`}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main App
 // ---------------------------------------------------------------------------
 
@@ -174,8 +238,10 @@ export default function App() {
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
   const [activePads] = useState<Set<number>>(new Set());
   const [padStates, setPadStates] = useState<PadState[]>(Array(PAD_COUNT).fill(null));
-  const [maxVoices, setMaxVoices] = useState<16 | 32 | 64>(16);
+  const [maxVoices, setMaxVoices] = useState<0 | 16 | 32 | 64>(16);
   const [retrigger, setRetrigger] = useState(true);
+  const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
+  const [padMonos, setPadMonos] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
   const [connected, setConnected] = useState(false);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
@@ -187,11 +253,13 @@ export default function App() {
     window.onPluginMessage = (raw: unknown) => {
       const msg = raw as PluginMessage;
       if (msg.type === "State") {
-        setCacheDir(msg.cacheDir);
-        setNeedsCacheDir(msg.needsCacheDir);
-        if (msg.pluginVersion) setPluginVersion(msg.pluginVersion);
-        if (msg.maxVoices != null) setMaxVoices(msg.maxVoices as 16 | 32 | 64);
+        if (msg.cacheDir !== undefined) setCacheDir(msg.cacheDir);
+        if (msg.needsCacheDir !== undefined) setNeedsCacheDir(msg.needsCacheDir);
+        if (msg.pluginVersion != null) setPluginVersion(msg.pluginVersion);
+        if (msg.maxVoices != null) setMaxVoices(msg.maxVoices as 0 | 16 | 32 | 64);
         if (msg.retrigger != null) setRetrigger(msg.retrigger);
+        if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
+        if (msg.padMonos != null) setPadMonos(msg.padMonos);
         setConnected(true);
       } else if (msg.type === "SampleLoaded") {
         setPadStates((prev) => {
@@ -252,7 +320,25 @@ export default function App() {
     }
   };
 
-  const handlePolyphonyChange = (v: 16 | 32 | 64) => {
+  const handlePadMonoChange = (padIndex: number, mono: boolean) => {
+    setPadMonos((prev) => {
+      const next = [...prev];
+      next[padIndex] = mono;
+      return next;
+    });
+    sendToPluginSafe({ type: "SetPadMono", padIndex, mono });
+  };
+
+  const handlePadVolumeChange = (padIndex: number, volume: number) => {
+    setPadVolumes((prev) => {
+      const next = [...prev];
+      next[padIndex] = volume;
+      return next;
+    });
+    sendToPluginSafe({ type: "SetPadVolume", padIndex, volume });
+  };
+
+  const handlePolyphonyChange = (v: 0 | 16 | 32 | 64) => {
     setMaxVoices(v);
     sendToPluginSafe({ type: "SetPolyphony", voices: v });
   };
@@ -277,11 +363,12 @@ export default function App() {
           <select
             className="ctrl-select"
             value={maxVoices}
-            onChange={(e) => handlePolyphonyChange(Number(e.target.value) as 16 | 32 | 64)}
+            onChange={(e) => handlePolyphonyChange(Number(e.target.value) as 0 | 16 | 32 | 64)}
           >
             <option value={16}>16</option>
             <option value={32}>32</option>
             <option value={64}>64</option>
+            <option value={0}>∞</option>
           </select>
 
           <label className="ctrl-label">retrigger</label>
@@ -309,6 +396,8 @@ export default function App() {
       <main className="app-main">
         <PadGrid activePads={activePads} padStates={padStates} onSampleDrop={handleSampleDrop} />
       </main>
+
+      <Mixer padStates={padStates} padVolumes={padVolumes} padMonos={padMonos} onVolumeChange={handlePadVolumeChange} onMonoChange={handlePadMonoChange} />
 
       <footer className="app-footer">
         <span className={`conn-dot ${connected ? "conn-dot--on" : ""}`} />
