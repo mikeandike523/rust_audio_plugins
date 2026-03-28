@@ -75,6 +75,67 @@ body {
   text-transform: uppercase;
 }
 
+/* ── App controls (polyphony / retrigger) ───────────────────── */
+
+.app-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.ctrl-label {
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ctrl-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+}
+
+.ctrl-select:focus {
+  border-color: var(--accent);
+}
+
+.ctrl-toggle {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  min-width: 36px;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.ctrl-toggle--on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Loading pulse ───────────────────────────────────────────── */
+
+@keyframes pad-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.pad--loading {
+  animation: pad-pulse 1.1s ease-in-out infinite;
+}
+
 .cache-status {
   display: flex;
   align-items: center;
@@ -123,7 +184,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 12px;
   overflow: hidden;
 }
 
@@ -132,20 +193,19 @@ body {
 .pad-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(4, 1fr);
-  gap: 10px;
-  width: min(640px, 100%);
+  gap: 7px;
+  width: min(420px, 100%, calc(100vh - 110px));
   aspect-ratio: 1;
 }
 
 .pad {
   background: var(--pad-bg);
   border: 1px solid var(--pad-border);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 8px;
+  padding: 7px 9px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   cursor: default;
   transition: border-color 0.06s, background 0.06s, box-shadow 0.06s;
   position: relative;
@@ -172,21 +232,35 @@ body {
   box-shadow: 0 0 16px var(--pad-active-glow);
 }
 
+.pad--drag-over {
+  border-color: var(--accent);
+  background: rgba(91, 110, 245, 0.18);
+  box-shadow: 0 0 12px var(--pad-active-glow);
+}
+
 .pad-label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pad-label--empty {
+  color: var(--text-muted);
+  opacity: 0.4;
 }
 
 .pad-note {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-muted);
 }
 
 .pad-sample {
-  font-size: 10px;
+  font-size: 9px;
   margin-top: auto;
   white-space: nowrap;
   overflow: hidden;
@@ -196,7 +270,7 @@ body {
 .pad-sample--empty {
   color: var(--text-muted);
   font-style: italic;
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
 /* ── Footer ─────────────────────────────────────────────────── */
