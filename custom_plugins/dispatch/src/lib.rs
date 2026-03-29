@@ -120,7 +120,7 @@ impl Voice {
 // ---------------------------------------------------------------------------
 
 enum UiEvent {
-    SampleLoaded { pad_index: usize, name: String },
+    SampleLoaded { pad_index: usize, name: String, norm_scale: f32 },
     SampleError { pad_index: usize, message: String },
     PadCleared { pad_index: usize },
 }
@@ -158,6 +158,20 @@ struct DispatchParams {
     #[persist = "pad_normalizes"]
     pub pad_normalizes: Arc<Mutex<[bool; PAD_COUNT]>>,
 
+    /// Per-pad hard-limiter toggle. When on, per-voice output is clamped to
+    /// [−1, +1] after all gain (normalize × volume × velocity).
+    #[persist = "pad_limiters"]
+    pub pad_limiters: Arc<Mutex<[bool; PAD_COUNT]>>,
+
+    /// Per-pad custom display names. None = show the original file name.
+    #[persist = "pad_custom_names"]
+    pub pad_custom_names: Arc<Mutex<[Option<String>; PAD_COUNT]>>,
+
+    /// When true the original file name is shown as a subtitle under a custom
+    /// pad name in the GUI.
+    #[persist = "show_original_name"]
+    pub show_original_name: Arc<Mutex<bool>>,
+
     /// Overall output gain in dB, applied after all voices are summed.
     #[id = "master_gain"]
     pub master_gain: FloatParam,
@@ -178,6 +192,9 @@ impl Default for DispatchParams {
             cache_dir: Arc::new(Mutex::new(None)),
             pad_uuids: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
             pad_normalizes: Arc::new(Mutex::new([false; PAD_COUNT])),
+            pad_limiters: Arc::new(Mutex::new([false; PAD_COUNT])),
+            pad_custom_names: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
+            show_original_name: Arc::new(Mutex::new(true)),
             master_gain: FloatParam::new(
                 "Master Gain",
                 0.0,
@@ -251,6 +268,20 @@ enum Action {
         #[serde(rename = "padIndex")]
         pad_index: usize,
         normalize: bool,
+    },
+    SetPadLimiter {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
+        limit: bool,
+    },
+    SetPadCustomName {
+        #[serde(rename = "padIndex")]
+        pad_index: usize,
+        /// None / JSON null clears the custom name and reverts to the file name.
+        name: Option<String>,
+    },
+    SetShowOriginalName {
+        enabled: bool,
     },
     SetMasterGain {
         #[serde(rename = "gainDb")]
@@ -510,8 +541,9 @@ fn spawn_pad_resample(
         let event = match result {
             Ok(data) => {
                 let name = data.name.clone();
+                let norm_scale = data.norm_scale;
                 *pad_data[pad_index].lock().unwrap() = Some(data);
-                UiEvent::SampleLoaded { pad_index, name }
+                UiEvent::SampleLoaded { pad_index, name, norm_scale }
             }
             Err(message) => UiEvent::SampleError { pad_index, message },
         };
@@ -769,8 +801,9 @@ impl Plugin for Dispatch {
             })
         });
 
-        // Lock pad_normalizes once per buffer, not per sample.
+        // Lock pad_normalizes and pad_limiters once per buffer, not per sample.
         let pad_normalizes = self.params.pad_normalizes.lock().unwrap().clone();
+        let pad_limiters = self.params.pad_limiters.lock().unwrap().clone();
         // Precompute velocity floor once per buffer.
         let vel_floor = 10f32.powf(self.params.vel_sens_db.value() / 20.0);
         let respect_note_offs = self.respect_note_offs.load(Ordering::Relaxed);
@@ -857,6 +890,11 @@ impl Plugin for Dispatch {
                                 } else {
                                     (l_raw, r_raw)
                                 };
+                                let (l, r) = if pad_limiters[v.pad_index] {
+                                    (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+                                } else {
+                                    (l, r)
+                                };
                                 out[0] += l;
                                 out[1] += r;
                                 v.sample_pos += 1;
@@ -931,6 +969,12 @@ impl Plugin for Dispatch {
                             let pad_uuids = params.pad_uuids.lock().unwrap().clone();
                             let pad_normalizes =
                                 params.pad_normalizes.lock().unwrap().clone();
+                            let pad_limiters =
+                                params.pad_limiters.lock().unwrap().clone();
+                            let pad_custom_names: Vec<Option<String>> =
+                                params.pad_custom_names.lock().unwrap().iter().cloned().collect();
+                            let show_original_name =
+                                *params.show_original_name.lock().unwrap();
                             let pad_vols: Vec<f32> = (0..PAD_COUNT)
                                 .map(|i| params.pads[i].volume.value())
                                 .collect();
@@ -952,6 +996,9 @@ impl Plugin for Dispatch {
                                 "padVolumes": pad_vols,
                                 "padMonos": pad_monos,
                                 "padNormalizes": pad_normalizes,
+                                "padLimiters": pad_limiters,
+                                "padCustomNames": pad_custom_names,
+                                "showOriginalName": show_original_name,
                             }));
 
                             let pr = project_sample_rate.load(Ordering::Relaxed);
@@ -973,11 +1020,13 @@ impl Plugin for Dispatch {
                                     continue;
                                 }
                                 if let Some(data) = load_resampled(&effective_dir, uuid, pr) {
+                                    let norm_scale = data.norm_scale;
                                     *pad_data[pad_idx].lock().unwrap() = Some(data);
                                     ctx.send_json(json!({
                                         "type": "SampleLoaded",
                                         "padIndex": pad_idx,
                                         "name": meta.name,
+                                        "normScale": norm_scale,
                                     }));
                                 } else {
                                     resample_in_progress[pad_idx]
@@ -1096,8 +1145,9 @@ impl Plugin for Dispatch {
 
                             let pr = project_sample_rate.load(Ordering::Relaxed);
                             if pr > 0 && sample_rate == pr {
+                                let ns = compute_rms_scale(&raw);
                                 *pad_data[pad_index].lock().unwrap() = Some(PadData {
-                                    norm_scale: compute_rms_scale(&raw),
+                                    norm_scale: ns,
                                     name: name.clone(),
                                     channels: channels as usize,
                                     frames: frames as usize,
@@ -1107,6 +1157,7 @@ impl Plugin for Dispatch {
                                     "type": "SampleLoaded",
                                     "padIndex": pad_index,
                                     "name": name,
+                                    "normScale": ns,
                                 }));
                             } else if pr > 0
                                 && !resample_in_progress[pad_index]
@@ -1196,6 +1247,32 @@ impl Plugin for Dispatch {
                             }
                         }
 
+                        Action::SetPadLimiter { pad_index, limit } => {
+                            if pad_index < PAD_COUNT {
+                                params.pad_limiters.lock().unwrap()[pad_index] = limit;
+                            }
+                        }
+
+                        Action::SetPadCustomName { pad_index, name } => {
+                            if pad_index < PAD_COUNT {
+                                params.pad_custom_names.lock().unwrap()[pad_index] = name;
+                                let names: Vec<Option<String>> =
+                                    params.pad_custom_names.lock().unwrap().iter().cloned().collect();
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "padCustomNames": names,
+                                }));
+                            }
+                        }
+
+                        Action::SetShowOriginalName { enabled } => {
+                            *params.show_original_name.lock().unwrap() = enabled;
+                            ctx.send_json(json!({
+                                "type": "State",
+                                "showOriginalName": enabled,
+                            }));
+                        }
+
                         Action::SetMasterGain { gain_db } => {
                             let clamped = gain_db.clamp(-15.0, 9.0);
                             setter.begin_set_parameter(&params.master_gain);
@@ -1214,6 +1291,17 @@ impl Plugin for Dispatch {
                             if pad_index < PAD_COUNT {
                                 *pad_data[pad_index].lock().unwrap() = None;
 
+                                // Reset all per-pad params to defaults.
+                                setter.begin_set_parameter(&params.pads[pad_index].volume);
+                                setter.set_parameter(&params.pads[pad_index].volume, 1.0);
+                                setter.end_set_parameter(&params.pads[pad_index].volume);
+                                setter.begin_set_parameter(&params.pads[pad_index].mono);
+                                setter.set_parameter(&params.pads[pad_index].mono, false);
+                                setter.end_set_parameter(&params.pads[pad_index].mono);
+                                params.pad_normalizes.lock().unwrap()[pad_index] = false;
+                                params.pad_limiters.lock().unwrap()[pad_index] = false;
+                                params.pad_custom_names.lock().unwrap()[pad_index] = None;
+
                                 let cache_dir_override =
                                     params.cache_dir.lock().unwrap().clone();
                                 let effective_dir =
@@ -1229,6 +1317,29 @@ impl Plugin for Dispatch {
                                     let _ = std::fs::remove_dir_all(&dir);
                                 }
 
+                                // Send the full per-pad arrays so the UI reflects
+                                // the reset values immediately.
+                                let pad_vols: Vec<f32> = (0..PAD_COUNT)
+                                    .map(|i| params.pads[i].volume.value())
+                                    .collect();
+                                let pad_monos: Vec<bool> = (0..PAD_COUNT)
+                                    .map(|i| params.pads[i].mono.value())
+                                    .collect();
+                                let pad_normalizes =
+                                    params.pad_normalizes.lock().unwrap().clone();
+                                let pad_limiters =
+                                    params.pad_limiters.lock().unwrap().clone();
+                                let pad_custom_names: Vec<Option<String>> =
+                                    params.pad_custom_names.lock().unwrap().iter().cloned().collect();
+
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "padVolumes": pad_vols,
+                                    "padMonos": pad_monos,
+                                    "padNormalizes": pad_normalizes,
+                                    "padLimiters": pad_limiters,
+                                    "padCustomNames": pad_custom_names,
+                                }));
                                 ctx.send_json(json!({
                                     "type": "PadCleared",
                                     "padIndex": pad_index,
@@ -1287,11 +1398,12 @@ impl Plugin for Dispatch {
                         ui_events.lock().unwrap().drain(..).collect();
                     for event in events {
                         match event {
-                            UiEvent::SampleLoaded { pad_index, name } => {
+                            UiEvent::SampleLoaded { pad_index, name, norm_scale } => {
                                 ctx.send_json(json!({
                                     "type": "SampleLoaded",
                                     "padIndex": pad_index,
                                     "name": name,
+                                    "normScale": norm_scale,
                                 }));
                             }
                             UiEvent::SampleError { pad_index, message } => {
