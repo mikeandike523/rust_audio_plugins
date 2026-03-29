@@ -72,14 +72,23 @@ struct PadData {
     channels: usize,
     frames: usize,
     data: Vec<f32>,
-    /// Precomputed 1.0 / peak_abs for the normalize feature. Always ≥ 1.0.
-    peak_scale: f32,
+    /// Precomputed RMS normalize scale: scales audio so its RMS equals 1.0
+    /// (same RMS as a full-scale 50% duty-cycle square wave). Always > 0.
+    norm_scale: f32,
 }
 
-/// Compute the normalize scale factor (1.0 / peak) once at load time.
-fn compute_peak_scale(data: &[f32]) -> f32 {
-    let peak = data.iter().copied().fold(0.0f32, |acc, s| acc.max(s.abs()));
-    if peak > 0.0 { 1.0 / peak } else { 1.0 }
+/// Compute the RMS normalize scale factor.
+/// Scales the sample so its RMS equals 1.0 (a full-scale 50% duty-cycle square wave's RMS).
+fn compute_rms_scale(data: &[f32]) -> f32 {
+    if data.is_empty() {
+        return 1.0;
+    }
+    let mean_sq = data.iter().copied().map(|s| s * s).sum::<f32>() / data.len() as f32;
+    let rms = mean_sq.sqrt();
+    // 1.0 is the RMS of a full-scale 50% duty-cycle square wave (peak = 1.0).
+    // Slightly hotter than sine (1/√2 ≈ 0.707) so normalised samples sit louder.
+    const TARGET_RMS: f32 = 1.0;
+    if rms > 0.0 { TARGET_RMS / rms } else { 1.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,12 +382,12 @@ fn load_resampled(cache_dir: &std::path::Path, uuid: &str, project_rate: u32) ->
     for chunk in array_bytes.chunks_exact(4) {
         data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
-    let peak_scale = compute_peak_scale(&data);
+    let norm_scale = compute_rms_scale(&data);
     Some(PadData {
         name: meta.name,
         channels: meta.channels as usize,
         frames: meta.frames as usize,
-        peak_scale,
+        norm_scale,
         data,
     })
 }
@@ -486,12 +495,12 @@ fn spawn_pad_resample(
             )
             .map_err(|e| format!("write resampled.json: {e}"))?;
 
-            let peak_scale = compute_peak_scale(&resampled);
+            let norm_scale = compute_rms_scale(&resampled);
             Ok(PadData {
                 name: meta.name,
                 channels: meta.channels as usize,
                 frames: out_frames,
-                peak_scale,
+                norm_scale,
                 data: resampled,
             })
         })();
@@ -830,7 +839,7 @@ impl Plugin for Dispatch {
                                 let fi = v.sample_pos * data.channels;
                                 let vol = self.params.pads[v.pad_index].volume.value();
                                 let norm_scale = if pad_normalizes[v.pad_index] {
-                                    data.peak_scale
+                                    data.norm_scale
                                 } else {
                                     1.0
                                 };
@@ -1088,7 +1097,7 @@ impl Plugin for Dispatch {
                             let pr = project_sample_rate.load(Ordering::Relaxed);
                             if pr > 0 && sample_rate == pr {
                                 *pad_data[pad_index].lock().unwrap() = Some(PadData {
-                                    peak_scale: compute_peak_scale(&raw),
+                                    norm_scale: compute_rms_scale(&raw),
                                     name: name.clone(),
                                     channels: channels as usize,
                                     frames: frames as usize,

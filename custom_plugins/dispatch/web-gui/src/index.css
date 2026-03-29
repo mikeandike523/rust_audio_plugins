@@ -234,6 +234,41 @@ body {
   outline: none;
 }
 
+/* ── Tab bar ────────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 6px 16px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 4px 12px 6px;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 /* ── Main area ──────────────────────────────────────────────── */
 
 .app-main {
@@ -372,54 +407,133 @@ body {
   opacity: 0.35;
 }
 
-/* Bottom controls: N M [vol slider] [val] */
-.pad-controls {
+
+/* ── Mixer View ─────────────────────────────────────────────── */
+
+.mixer-view {
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 2px;
+}
+
+.mixer-strip {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 4px;
-  margin-top: auto;
-  flex-shrink: 0;
-}
-
-.pad-ctrl-btn {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 8px;
-  font-family: inherit;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 1px 3px;
-  cursor: pointer;
-  line-height: 1.4;
-  flex-shrink: 0;
-  transition: border-color 0.1s, color 0.1s, background 0.1s;
-}
-
-.pad-ctrl-btn--on {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: rgba(91, 110, 245, 0.12);
-}
-
-.pad-vol-slider {
   flex: 1;
-  min-width: 0;
-  height: 14px;
-  cursor: pointer;
-  accent-color: var(--accent);
-  padding: 0;
-  margin: 0;
+  min-width: 38px;
+  max-width: 64px;
+  height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 4px;
 }
 
-.pad-vol-val {
+.mixer-pad-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.mixer-note {
   font-size: 8px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.mixer-name {
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  text-align: center;
+  max-width: 100%;
+}
+
+.mixer-fader-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-height: 0;
+  gap: 2px;
+  width: 100%;
+}
+
+.mixer-db-mark {
+  font-size: 7px;
   color: var(--text-muted);
   letter-spacing: 0.02em;
   flex-shrink: 0;
-  min-width: 24px;
-  text-align: right;
+  opacity: 0.6;
+}
+
+.mixer-fader {
+  flex: 1;
+  min-height: 0;
+  width: 20px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+  -webkit-appearance: slider-vertical;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.mixer-db-val {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: center;
+}
+
+.mixer-toggles {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.mixer-toggle {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 5px;
+  cursor: pointer;
+  line-height: 1;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+}
+
+.mixer-toggle:hover {
+  border-color: #404050;
+  color: var(--text);
+}
+
+.mixer-toggle--on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(91, 110, 245, 0.15);
 }
 
 /* ── Master Bar (OUT + VEL) ─────────────────────────────────── */

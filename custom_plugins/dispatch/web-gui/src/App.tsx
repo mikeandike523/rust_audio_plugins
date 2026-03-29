@@ -33,6 +33,20 @@ const sendToPluginSafe = (payload: unknown) => {
 
 const PAD_COUNT = 16;
 const PAD_MIDI_BASE = 36;
+const DB_MIN = -30;
+const DB_MAX = 6;
+const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+
+const linearToDb = (lin: number) =>
+  lin <= 0 ? DB_MIN : Math.max(DB_MIN, 20 * Math.log10(lin));
+const dbToLinear = (db: number) => Math.pow(10, db / 20);
+const fmtDb = (db: number) =>
+  Math.abs(db) < 0.05 ? "0.0" : `${db > 0 ? "+" : ""}${db.toFixed(1)}`;
+
+function padNoteName(padIndex: number) {
+  const midiNote = PAD_MIDI_BASE + padIndex;
+  return `${NOTE_NAMES[midiNote % 12]}${Math.floor(midiNote / 12) - 1}`;
+}
 
 // Decode a dropped audio file to interleaved f32 base64
 async function decodeAudioFile(file: File): Promise<{
@@ -162,45 +176,29 @@ function CacheDirBar({
 }
 
 // ---------------------------------------------------------------------------
-// Pad Grid (with per-pad volume / mono / normalize controls)
+// Pad Grid (drop targets only — controls live in the Mixer tab)
 // ---------------------------------------------------------------------------
 
 function PadGrid({
   activePads,
   padStates,
-  padVolumes,
-  padMonos,
-  padNormalizes,
   onSampleDrop,
   onDeletePad,
-  onVolumeChange,
-  onMonoChange,
-  onNormalizeChange,
 }: {
   activePads: Set<number>;
   padStates: PadState[];
-  padVolumes: number[];
-  padMonos: boolean[];
-  padNormalizes: boolean[];
   onSampleDrop: (padIndex: number, file: File) => void;
   onDeletePad: (padIndex: number) => void;
-  onVolumeChange: (padIndex: number, volume: number) => void;
-  onMonoChange: (padIndex: number, mono: boolean) => void;
-  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
 }) {
   const [dragOverPad, setDragOverPad] = useState<number | null>(null);
 
   return (
     <div className="pad-grid">
       {Array.from({ length: PAD_COUNT }, (_, i) => {
-        const midiNote = PAD_MIDI_BASE + i;
-        const noteNames = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-        const noteName = `${noteNames[midiNote % 12]}${Math.floor(midiNote / 12) - 1}`;
+        const noteName = padNoteName(i);
         const isActive = activePads.has(i);
         const isDragOver = dragOverPad === i;
         const pad = padStates[i];
-        const vol = padVolumes[i];
-        const volLabel = vol === 1.0 ? "0dB" : vol === 0 ? "−∞" : `${((vol - 1) * 100).toFixed(0)}%`;
 
         return (
           <div
@@ -213,7 +211,7 @@ function PadGrid({
             ]
               .filter(Boolean)
               .join(" ")}
-            title={`MIDI ${midiNote}`}
+            title={`MIDI ${PAD_MIDI_BASE + i}`}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
@@ -252,34 +250,83 @@ function PadGrid({
             {!pad && (
               <div className="pad-drop-hint">drop sample</div>
             )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-            {/* Bottom row: N/M toggles + volume slider + value */}
-            <div className="pad-controls">
+// ---------------------------------------------------------------------------
+// Mixer View — one vertical channel strip per pad
+// ---------------------------------------------------------------------------
+
+function MixerView({
+  padStates,
+  padVolumes,
+  padMonos,
+  padNormalizes,
+  onVolumeChange,
+  onMonoChange,
+  onNormalizeChange,
+}: {
+  padStates: PadState[];
+  padVolumes: number[];
+  padMonos: boolean[];
+  padNormalizes: boolean[];
+  onVolumeChange: (padIndex: number, volume: number) => void;
+  onMonoChange: (padIndex: number, mono: boolean) => void;
+  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
+}) {
+  return (
+    <div className="mixer-view">
+      {Array.from({ length: PAD_COUNT }, (_, i) => {
+        const noteName = padNoteName(i);
+        const pad = padStates[i];
+        const db = linearToDb(padVolumes[i]);
+
+        return (
+          <div key={i} className="mixer-strip">
+            <div className="mixer-pad-label">
+              <span className="mixer-note">{noteName}</span>
+              <span className="mixer-name" title={pad?.name ?? ""}>
+                {pad ? (pad.loading ? "…" : pad.name) : String(i + 1)}
+              </span>
+            </div>
+
+            <div className="mixer-fader-area">
+              <span className="mixer-db-mark mixer-db-mark--top">+{DB_MAX}</span>
+              <input
+                type="range"
+                className="mixer-fader"
+                min={DB_MIN}
+                max={DB_MAX}
+                step={0.1}
+                value={db}
+                onChange={(e) => onVolumeChange(i, dbToLinear(Number(e.target.value)))}
+                onDoubleClick={() => onVolumeChange(i, 1.0)}
+                title="Double-click to reset to 0 dB"
+              />
+              <span className="mixer-db-mark mixer-db-mark--bot">{DB_MIN}</span>
+            </div>
+
+            <div className="mixer-db-val">{fmtDb(db)}</div>
+
+            <div className="mixer-toggles">
               <button
-                className={`pad-ctrl-btn${padNormalizes[i] ? " pad-ctrl-btn--on" : ""}`}
-                onClick={(e) => { e.stopPropagation(); onNormalizeChange(i, !padNormalizes[i]); }}
-                title="Normalize (pre-scale to peak = 1.0)"
+                className={`mixer-toggle${padNormalizes[i] ? " mixer-toggle--on" : ""}`}
+                onClick={() => onNormalizeChange(i, !padNormalizes[i])}
+                title="RMS normalize (scales to match full-scale sine RMS)"
               >
                 N
               </button>
               <button
-                className={`pad-ctrl-btn${padMonos[i] ? " pad-ctrl-btn--on" : ""}`}
-                onClick={(e) => { e.stopPropagation(); onMonoChange(i, !padMonos[i]); }}
+                className={`mixer-toggle${padMonos[i] ? " mixer-toggle--on" : ""}`}
+                onClick={() => onMonoChange(i, !padMonos[i])}
                 title="Force mono"
               >
                 M
               </button>
-              <input
-                type="range"
-                className="pad-vol-slider"
-                min={0}
-                max={2}
-                step={0.01}
-                value={vol}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => { e.stopPropagation(); onVolumeChange(i, Number(e.target.value)); }}
-              />
-              <span className="pad-vol-val">{volLabel}</span>
             </div>
           </div>
         );
@@ -362,6 +409,7 @@ export default function App() {
   const [padMonos, setPadMonos] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
   const [padNormalizes, setPadNormalizes] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
   const [connected, setConnected] = useState(false);
+  const [activeTab, setActiveTab] = useState<"pads" | "mixer">("pads");
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
 
@@ -603,19 +651,41 @@ export default function App() {
         onRemoveCustomDir={handleRemoveCustomDir}
       />
 
+      <div className="tab-bar">
+        <button
+          className={`tab-btn${activeTab === "pads" ? " tab-btn--active" : ""}`}
+          onClick={() => setActiveTab("pads")}
+        >
+          PADS
+        </button>
+        <button
+          className={`tab-btn${activeTab === "mixer" ? " tab-btn--active" : ""}`}
+          onClick={() => setActiveTab("mixer")}
+        >
+          MIXER
+        </button>
+      </div>
+
       <main className="app-main">
-        <PadGrid
-          activePads={activePads}
-          padStates={padStates}
-          padVolumes={padVolumes}
-          padMonos={padMonos}
-          padNormalizes={padNormalizes}
-          onSampleDrop={handleSampleDrop}
-          onDeletePad={handleDeletePad}
-          onVolumeChange={handlePadVolumeChange}
-          onMonoChange={handlePadMonoChange}
-          onNormalizeChange={handlePadNormalizeChange}
-        />
+        <div style={{ display: activeTab === "pads" ? "flex" : "none", width: "100%", height: "100%", alignItems: "stretch", justifyContent: "center" }}>
+          <PadGrid
+            activePads={activePads}
+            padStates={padStates}
+            onSampleDrop={handleSampleDrop}
+            onDeletePad={handleDeletePad}
+          />
+        </div>
+        <div style={{ display: activeTab === "mixer" ? "flex" : "none", width: "100%", height: "100%" }}>
+          <MixerView
+            padStates={padStates}
+            padVolumes={padVolumes}
+            padMonos={padMonos}
+            padNormalizes={padNormalizes}
+            onVolumeChange={handlePadVolumeChange}
+            onMonoChange={handlePadMonoChange}
+            onNormalizeChange={handlePadNormalizeChange}
+          />
+        </div>
       </main>
 
       <MasterBar
