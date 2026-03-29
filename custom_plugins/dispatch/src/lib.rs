@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use directories::ProjectDirs;
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use serde::Deserialize;
@@ -15,11 +16,52 @@ const GUI_PUBLISHED_URL: &str = "https://dispatch-web-gui.vercel.app";
 
 const PAD_COUNT: usize = 16;
 const PAD_MIDI_BASE: u8 = 36;
-/// Maximum voice slots used in finite polyphony modes.
-const MAX_VOICES: usize = 64;
 /// Capacity pre-allocated for infinite polyphony to reduce runtime heap allocations.
 const INFINITE_POLY_PREALLOCATE: usize = 128;
+/// Maximum voice slots for finite polyphony (largest base_voices option).
+const MAX_FINITE_VOICES: usize = 64;
 const RESAMPLE_POINTS: usize = 64;
+
+// ---------------------------------------------------------------------------
+// Default cache directory (cross-platform)
+// ---------------------------------------------------------------------------
+
+fn default_cache_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "Dispatch") {
+        proj.data_local_dir().join("cache")
+    } else {
+        // Last-resort fallback: working directory
+        PathBuf::from("dispatch_cache")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UUID generation — 8 lowercase hex chars, collision-checked against cache dir
+// ---------------------------------------------------------------------------
+
+fn random_hex8() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::SystemTime;
+
+    let mut h = DefaultHasher::new();
+    SystemTime::now().hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    // Mix in a global counter for uniqueness within the same tick
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    CTR.fetch_add(1, Ordering::Relaxed).hash(&mut h);
+    format!("{:08x}", h.finish() as u32)
+}
+
+/// Generate a cache key that does not already exist as a subdirectory of `cache_dir`.
+fn new_unique_cache_key(cache_dir: &std::path::Path) -> String {
+    loop {
+        let key = random_hex8();
+        if !cache_dir.join(&key).exists() {
+            return key;
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // In-memory pad audio (at project sample rate)
@@ -90,9 +132,22 @@ struct PadChannelParams {
 
 #[derive(Params)]
 struct DispatchParams {
-    /// Per-instance cache directory, persisted by the DAW in the project file.
+    /// Optional per-instance cache directory override. When None, the global
+    /// default (platform AppData dir) is used.
     #[persist = "cache_dir"]
     pub cache_dir: Arc<Mutex<Option<String>>>,
+
+    /// Per-pad UUID cache keys. Each slot holds the 8-char hex key that
+    /// identifies the pad's data folder inside the cache directory.
+    /// None means no sample has been loaded to that pad in this instance.
+    #[persist = "pad_uuids"]
+    pub pad_uuids: Arc<Mutex<[Option<String>; PAD_COUNT]>>,
+
+    /// Per-pad normalize toggle (not a DAW automation param — persisted as
+    /// instance state rather than a float/bool param so it doesn't clutter
+    /// the DAW's automation lane list).
+    #[persist = "pad_normalizes"]
+    pub pad_normalizes: Arc<Mutex<[bool; PAD_COUNT]>>,
 
     /// Overall output gain in dB, applied after all voices are summed.
     #[id = "master_gain"]
@@ -107,6 +162,8 @@ impl Default for DispatchParams {
     fn default() -> Self {
         Self {
             cache_dir: Arc::new(Mutex::new(None)),
+            pad_uuids: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
+            pad_normalizes: Arc::new(Mutex::new([false; PAD_COUNT])),
             master_gain: FloatParam::new(
                 "Master Gain",
                 0.0,
@@ -148,8 +205,11 @@ enum Action {
         #[serde(rename = "dataBase64")]
         data_base64: String,
     },
-    SetPolyphony {
+    SetBaseVoices {
         voices: u32,
+    },
+    SetAllowInfiniteVoices {
+        enabled: bool,
     },
     SetRetrigger {
         enabled: bool,
@@ -183,20 +243,29 @@ enum Action {
 // Disk helpers
 // ---------------------------------------------------------------------------
 
-fn pad_dir(cache_dir: &str, pad_index: usize) -> PathBuf {
-    PathBuf::from(cache_dir).join(format!("pad_{pad_index}"))
+/// Resolve the effective cache directory: per-instance override if set,
+/// otherwise the platform-appropriate AppData default.
+fn effective_cache_dir(override_dir: &Option<String>) -> PathBuf {
+    match override_dir {
+        Some(s) => PathBuf::from(s),
+        None => default_cache_dir(),
+    }
+}
+
+fn pad_dir(cache_dir: &std::path::Path, uuid: &str) -> PathBuf {
+    cache_dir.join(uuid)
 }
 
 fn save_pad_raw(
-    cache_dir: &str,
-    pad_index: usize,
+    cache_dir: &std::path::Path,
+    uuid: &str,
     name: &str,
     sample_rate: u32,
     channels: u16,
     frames: u32,
     data: &[f32],
 ) -> Result<(), String> {
-    let dir = pad_dir(cache_dir, pad_index);
+    let dir = pad_dir(cache_dir, uuid);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create pad dir: {e}"))?;
 
     let mut bytes = Vec::with_capacity(data.len() * 4);
@@ -239,16 +308,16 @@ struct ResampledMeta {
     source_sample_rate: u32,
 }
 
-fn load_raw_meta(cache_dir: &str, pad_index: usize) -> Option<RawMeta> {
-    let bytes = std::fs::read(pad_dir(cache_dir, pad_index).join("sample.json")).ok()?;
+fn load_raw_meta(cache_dir: &std::path::Path, uuid: &str) -> Option<RawMeta> {
+    let bytes = std::fs::read(pad_dir(cache_dir, uuid).join("sample.json")).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-fn load_resampled(cache_dir: &str, pad_index: usize, project_rate: u32) -> Option<PadData> {
-    let dir = pad_dir(cache_dir, pad_index);
+fn load_resampled(cache_dir: &std::path::Path, uuid: &str, project_rate: u32) -> Option<PadData> {
+    let dir = pad_dir(cache_dir, uuid);
     let meta_bytes = std::fs::read(dir.join("resampled.json")).ok()?;
     let meta: ResampledMeta = serde_json::from_slice(&meta_bytes).ok()?;
-    let raw_meta = load_raw_meta(cache_dir, pad_index)?;
+    let raw_meta = load_raw_meta(cache_dir, uuid)?;
     if meta.sample_rate != project_rate || meta.source_sample_rate != raw_meta.sample_rate {
         return None;
     }
@@ -326,17 +395,18 @@ fn resample_sinc(input: &[f32], channels: usize, in_rate: u32, out_rate: u32) ->
 // ---------------------------------------------------------------------------
 
 fn spawn_pad_resample(
-    cache_dir: String,
-    pad_index: usize,
+    cache_dir: PathBuf,
+    uuid: String,
     project_rate: u32,
     pad_data: Arc<Vec<Mutex<Option<PadData>>>>,
+    pad_index: usize,
     resample_in_progress: Arc<Vec<AtomicBool>>,
     ui_events: Arc<Mutex<Vec<UiEvent>>>,
     ui_dirty: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
         let result = (|| -> Result<PadData, String> {
-            let dir = pad_dir(&cache_dir, pad_index);
+            let dir = pad_dir(&cache_dir, &uuid);
             let meta_bytes = std::fs::read(dir.join("sample.json"))
                 .map_err(|e| format!("sample.json missing: {e}"))?;
             let meta: RawMeta = serde_json::from_slice(&meta_bytes)
@@ -348,7 +418,8 @@ fn spawn_pad_resample(
                 raw.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
 
-            let resampled = resample_sinc(&raw, meta.channels as usize, meta.sample_rate, project_rate);
+            let resampled =
+                resample_sinc(&raw, meta.channels as usize, meta.sample_rate, project_rate);
             let out_frames = resampled.len() / meta.channels as usize;
 
             let mut out_bytes = Vec::with_capacity(resampled.len() * 4);
@@ -405,8 +476,6 @@ fn spawn_pad_resample(
 
 pub struct Dispatch {
     params: Arc<DispatchParams>,
-    /// Per-pad normalize toggle (UI-only, not a DAW param).
-    normalize: Arc<Vec<AtomicBool>>,
 
     voices: Vec<Voice>,
     voice_seq: u64,
@@ -414,7 +483,11 @@ pub struct Dispatch {
     pad_data: Arc<Vec<Mutex<Option<PadData>>>>,
     project_sample_rate: Arc<AtomicU32>,
     sample_rate_changed: Arc<AtomicBool>,
-    max_voices: Arc<AtomicU32>,
+
+    /// Number of voices (16, 32, or 64) used as the cap when infinite is off.
+    base_voices: Arc<AtomicU32>,
+    /// When true, voices grow unboundedly. When false, base_voices is the cap.
+    allow_infinite_voices: Arc<AtomicBool>,
     retrigger: Arc<AtomicBool>,
 
     ui_events: Arc<Mutex<Vec<UiEvent>>>,
@@ -427,13 +500,13 @@ impl Default for Dispatch {
     fn default() -> Self {
         Self {
             params: Arc::new(DispatchParams::default()),
-            normalize: Arc::new((0..PAD_COUNT).map(|_| AtomicBool::new(false)).collect()),
             voices: Vec::new(),
             voice_seq: 0,
             pad_data: Arc::new((0..PAD_COUNT).map(|_| Mutex::new(None)).collect()),
             project_sample_rate: Arc::new(AtomicU32::new(0)),
             sample_rate_changed: Arc::new(AtomicBool::new(false)),
-            max_voices: Arc::new(AtomicU32::new(16)),
+            base_voices: Arc::new(AtomicU32::new(16)),
+            allow_infinite_voices: Arc::new(AtomicBool::new(true)),
             retrigger: Arc::new(AtomicBool::new(true)),
             ui_events: Arc::new(Mutex::new(Vec::new())),
             ui_events_dirty: Arc::new(AtomicBool::new(false)),
@@ -446,14 +519,15 @@ impl Default for Dispatch {
 
 impl Dispatch {
     fn trigger_pad(&mut self, pad_index: usize, velocity: f32) {
-        let max_v_raw = self.max_voices.load(Ordering::Relaxed) as usize;
+        let infinite = self.allow_infinite_voices.load(Ordering::Relaxed);
         let retrigger = self.retrigger.load(Ordering::Relaxed);
 
-        // ── Infinite polyphony (max_voices == 0) ─────────────────────────────
-        if max_v_raw == 0 {
+        // ── Infinite polyphony ────────────────────────────────────────────────
+        if infinite {
             if retrigger {
-                // Retrigger: restart the existing voice for this pad if one is active.
-                if let Some(v) = self.voices.iter_mut().find(|v| v.active && v.pad_index == pad_index) {
+                if let Some(v) =
+                    self.voices.iter_mut().find(|v| v.active && v.pad_index == pad_index)
+                {
                     v.sample_pos = 0;
                     v.velocity_gain = velocity;
                     v.seq = self.voice_seq;
@@ -461,7 +535,6 @@ impl Dispatch {
                     return;
                 }
             }
-            // No stealing — push a new voice; Vec grows if capacity is exhausted.
             self.voices.push(Voice {
                 active: true,
                 pad_index,
@@ -474,10 +547,9 @@ impl Dispatch {
         }
 
         // ── Finite polyphony ─────────────────────────────────────────────────
-        let max_v = max_v_raw.min(MAX_VOICES);
+        let max_v = (self.base_voices.load(Ordering::Relaxed) as usize).min(MAX_FINITE_VOICES);
 
         if retrigger {
-            // Retrigger: restart the existing voice for this pad.
             if let Some(v) = self.voices[..max_v]
                 .iter_mut()
                 .find(|v| v.active && v.pad_index == pad_index)
@@ -571,18 +643,15 @@ impl Plugin for Dispatch {
         let sr = buffer_config.sample_rate.round() as u32;
         self.project_sample_rate.store(sr, Ordering::Relaxed);
         self.sample_rate_changed.store(true, Ordering::Relaxed);
-        // Pre-allocate enough capacity for both finite slots and a burst of infinite voices
-        // so that push() in infinite mode rarely triggers a heap reallocation.
         self.voices.clear();
-        self.voices.reserve(INFINITE_POLY_PREALLOCATE.max(MAX_VOICES));
-        self.voices.resize_with(MAX_VOICES, Voice::idle);
+        self.voices
+            .reserve(INFINITE_POLY_PREALLOCATE.max(MAX_FINITE_VOICES));
+        self.voices.resize_with(MAX_FINITE_VOICES, Voice::idle);
         true
     }
 
     fn reset(&mut self) {
-        // Truncate any voices pushed beyond MAX_VOICES by infinite polyphony mode,
-        // then silence the finite slots.
-        self.voices.truncate(MAX_VOICES);
+        self.voices.truncate(MAX_FINITE_VOICES);
         for v in &mut self.voices {
             v.active = false;
         }
@@ -604,10 +673,6 @@ impl Plugin for Dispatch {
         while let Some(e) = context.next_event() {
             events.push(e);
         }
-        // nih-plug delivers events in time order, but within the same tick the host
-        // ordering is undefined. Sort so NoteOff/velocity-0 always precedes NoteOn
-        // at identical timestamps — this ensures a "release + retrigger at the same
-        // tick" pair is always processed correctly.
         events.sort_by(|a, b| {
             a.timing().cmp(&b.timing()).then_with(|| {
                 let off_first = |e: &NoteEvent<()>| match e {
@@ -618,6 +683,9 @@ impl Plugin for Dispatch {
                 off_first(a).cmp(&off_first(b))
             })
         });
+
+        // Lock pad_normalizes once per buffer, not per sample.
+        let pad_normalizes = self.params.pad_normalizes.lock().unwrap().clone();
 
         for (sample_id, channels) in buffer.iter_samples().enumerate() {
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -643,19 +711,17 @@ impl Plugin for Dispatch {
                 if let Ok(guard) = self.pad_data[v.pad_index].try_lock() {
                     match *guard {
                         None => {
-                            // Sample was cleared/deleted — kill the voice immediately.
                             v.active = false;
                         }
                         Some(ref data) => {
                             if v.sample_pos < data.frames {
                                 let fi = v.sample_pos * data.channels;
                                 let vol = self.params.pads[v.pad_index].volume.value();
-                                let norm_scale =
-                                    if self.normalize[v.pad_index].load(Ordering::Relaxed) {
-                                        data.peak_scale
-                                    } else {
-                                        1.0
-                                    };
+                                let norm_scale = if pad_normalizes[v.pad_index] {
+                                    data.peak_scale
+                                } else {
+                                    1.0
+                                };
                                 let gain = v.velocity_gain * vol * norm_scale;
                                 let l_raw = data.data[fi] * gain;
                                 let r_raw = if data.channels > 1 {
@@ -689,7 +755,6 @@ impl Plugin for Dispatch {
             }
         }
 
-        // Apply master gain (computed once per buffer, not per sample).
         let master_db = self.params.master_gain.value();
         if master_db != 0.0 {
             let master_lin = 10.0f32.powf(master_db / 20.0);
@@ -700,10 +765,8 @@ impl Plugin for Dispatch {
             }
         }
 
-        // In infinite polyphony mode, reclaim slots for finished voices.
-        // Vec::retain never increases capacity, so this is allocation-free as long as
-        // the pre-allocated capacity covers the number of concurrent voices.
-        if self.max_voices.load(Ordering::Relaxed) == 0 {
+        // In infinite polyphony mode, reclaim finished voice slots.
+        if self.allow_infinite_voices.load(Ordering::Relaxed) {
             self.voices.retain(|v| v.active);
         }
 
@@ -714,9 +777,9 @@ impl Plugin for Dispatch {
         let pad_data = self.pad_data.clone();
         let project_sample_rate = self.project_sample_rate.clone();
         let sample_rate_changed = self.sample_rate_changed.clone();
-        let max_voices = self.max_voices.clone();
+        let base_voices = self.base_voices.clone();
+        let allow_infinite_voices = self.allow_infinite_voices.clone();
         let retrigger = self.retrigger.clone();
-        let normalize = self.normalize.clone();
         let ui_events = self.ui_events.clone();
         let ui_events_dirty = self.ui_events_dirty.clone();
         let resample_in_progress = self.resample_in_progress.clone();
@@ -738,23 +801,27 @@ impl Plugin for Dispatch {
 
                     match action {
                         Action::Init => {
-                            let cache_dir = params.cache_dir.lock().unwrap().clone();
-                            let needs_cache_dir = cache_dir.is_none();
+                            let cache_dir_override =
+                                params.cache_dir.lock().unwrap().clone();
+                            let effective_dir =
+                                effective_cache_dir(&cache_dir_override);
+                            let pad_uuids = params.pad_uuids.lock().unwrap().clone();
+                            let pad_normalizes =
+                                params.pad_normalizes.lock().unwrap().clone();
                             let pad_vols: Vec<f32> = (0..PAD_COUNT)
                                 .map(|i| params.pads[i].volume.value())
                                 .collect();
                             let pad_monos: Vec<bool> = (0..PAD_COUNT)
                                 .map(|i| params.pads[i].mono.value())
                                 .collect();
-                            let pad_normalizes: Vec<bool> = (0..PAD_COUNT)
-                                .map(|i| normalize[i].load(Ordering::Relaxed))
-                                .collect();
+
                             ctx.send_json(json!({
                                 "type": "State",
-                                "cacheDir": cache_dir,
-                                "needsCacheDir": needs_cache_dir,
+                                "cacheDirOverride": cache_dir_override,
+                                "effectiveCacheDir": effective_dir.to_string_lossy(),
                                 "pluginVersion": env!("CARGO_PKG_VERSION"),
-                                "maxVoices": max_voices.load(Ordering::Relaxed),
+                                "baseVoices": base_voices.load(Ordering::Relaxed),
+                                "allowInfiniteVoices": allow_infinite_voices.load(Ordering::Relaxed),
                                 "retrigger": retrigger.load(Ordering::Relaxed),
                                 "masterGain": params.master_gain.value(),
                                 "padVolumes": pad_vols,
@@ -762,52 +829,56 @@ impl Plugin for Dispatch {
                                 "padNormalizes": pad_normalizes,
                             }));
 
-                            if let Some(ref cd) = cache_dir {
-                                let pr = project_sample_rate.load(Ordering::Relaxed);
-                                for pad_idx in 0..PAD_COUNT {
-                                    let Some(meta) = load_raw_meta(cd, pad_idx) else {
-                                        continue;
-                                    };
+                            let pr = project_sample_rate.load(Ordering::Relaxed);
+                            for pad_idx in 0..PAD_COUNT {
+                                let Some(ref uuid) = pad_uuids[pad_idx] else {
+                                    continue;
+                                };
+                                let Some(meta) = load_raw_meta(&effective_dir, uuid) else {
+                                    continue;
+                                };
+                                ctx.send_json(json!({
+                                    "type": "PadName",
+                                    "padIndex": pad_idx,
+                                    "name": meta.name,
+                                }));
+                                if pr == 0
+                                    || resample_in_progress[pad_idx].load(Ordering::Relaxed)
+                                {
+                                    continue;
+                                }
+                                if let Some(data) = load_resampled(&effective_dir, uuid, pr) {
+                                    *pad_data[pad_idx].lock().unwrap() = Some(data);
                                     ctx.send_json(json!({
-                                        "type": "PadName",
+                                        "type": "SampleLoaded",
                                         "padIndex": pad_idx,
                                         "name": meta.name,
                                     }));
-                                    if pr == 0
-                                        || resample_in_progress[pad_idx].load(Ordering::Relaxed)
-                                    {
-                                        continue;
-                                    }
-                                    if let Some(data) = load_resampled(cd, pad_idx, pr) {
-                                        *pad_data[pad_idx].lock().unwrap() = Some(data);
-                                        ctx.send_json(json!({
-                                            "type": "SampleLoaded",
-                                            "padIndex": pad_idx,
-                                            "name": meta.name,
-                                        }));
-                                    } else {
-                                        resample_in_progress[pad_idx]
-                                            .store(true, Ordering::Relaxed);
-                                        spawn_pad_resample(
-                                            cd.clone(),
-                                            pad_idx,
-                                            pr,
-                                            pad_data.clone(),
-                                            resample_in_progress.clone(),
-                                            ui_events.clone(),
-                                            ui_events_dirty.clone(),
-                                        );
-                                    }
+                                } else {
+                                    resample_in_progress[pad_idx]
+                                        .store(true, Ordering::Relaxed);
+                                    spawn_pad_resample(
+                                        effective_dir.clone(),
+                                        uuid.clone(),
+                                        pr,
+                                        pad_data.clone(),
+                                        pad_idx,
+                                        resample_in_progress.clone(),
+                                        ui_events.clone(),
+                                        ui_events_dirty.clone(),
+                                    );
                                 }
                             }
                         }
 
                         Action::SetCacheDir { path } => {
                             *params.cache_dir.lock().unwrap() = Some(path.clone());
+                            let effective =
+                                effective_cache_dir(&Some(path.clone()));
                             ctx.send_json(json!({
                                 "type": "State",
-                                "cacheDir": path,
-                                "needsCacheDir": false,
+                                "cacheDirOverride": path,
+                                "effectiveCacheDir": effective.to_string_lossy(),
                             }));
                         }
 
@@ -816,10 +887,11 @@ impl Plugin for Dispatch {
                             for slot in pad_data.iter() {
                                 *slot.lock().unwrap() = None;
                             }
+                            let effective = effective_cache_dir(&None);
                             ctx.send_json(json!({
                                 "type": "State",
-                                "cacheDir": null,
-                                "needsCacheDir": true,
+                                "cacheDirOverride": null,
+                                "effectiveCacheDir": effective.to_string_lossy(),
                             }));
                         }
 
@@ -835,18 +907,19 @@ impl Plugin for Dispatch {
                                 continue;
                             }
 
-                            let decoded =
-                                match general_purpose::STANDARD.decode(data_base64.as_bytes()) {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        ctx.send_json(json!({
-                                            "type": "SampleError",
-                                            "padIndex": pad_index,
-                                            "message": format!("base64 decode: {e}"),
-                                        }));
-                                        continue;
-                                    }
-                                };
+                            let decoded = match general_purpose::STANDARD
+                                .decode(data_base64.as_bytes())
+                            {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    ctx.send_json(json!({
+                                        "type": "SampleError",
+                                        "padIndex": pad_index,
+                                        "message": format!("base64 decode: {e}"),
+                                    }));
+                                    continue;
+                                }
+                            };
 
                             let expected = frames as usize * channels as usize * 4;
                             if decoded.len() != expected {
@@ -865,19 +938,23 @@ impl Plugin for Dispatch {
                                 ]));
                             }
 
-                            let cache_dir = params.cache_dir.lock().unwrap().clone();
-                            let Some(ref cd) = cache_dir else {
-                                ctx.send_json(json!({
-                                    "type": "SampleError",
-                                    "padIndex": pad_index,
-                                    "message": "no cache directory set",
-                                }));
-                                continue;
+                            let cache_dir_override =
+                                params.cache_dir.lock().unwrap().clone();
+                            let effective_dir = effective_cache_dir(&cache_dir_override);
+
+                            // Ensure (or reuse) a UUID for this pad slot.
+                            let uuid = {
+                                let mut uuids = params.pad_uuids.lock().unwrap();
+                                if uuids[pad_index].is_none() {
+                                    uuids[pad_index] =
+                                        Some(new_unique_cache_key(&effective_dir));
+                                }
+                                uuids[pad_index].clone().unwrap()
                             };
 
                             if let Err(e) = save_pad_raw(
-                                cd,
-                                pad_index,
+                                &effective_dir,
+                                &uuid,
                                 &name,
                                 sample_rate,
                                 channels,
@@ -907,14 +984,17 @@ impl Plugin for Dispatch {
                                     "name": name,
                                 }));
                             } else if pr > 0
-                                && !resample_in_progress[pad_index].load(Ordering::Relaxed)
+                                && !resample_in_progress[pad_index]
+                                    .load(Ordering::Relaxed)
                             {
-                                resample_in_progress[pad_index].store(true, Ordering::Relaxed);
+                                resample_in_progress[pad_index]
+                                    .store(true, Ordering::Relaxed);
                                 spawn_pad_resample(
-                                    cd.clone(),
-                                    pad_index,
+                                    effective_dir,
+                                    uuid,
                                     pr,
                                     pad_data.clone(),
+                                    pad_index,
                                     resample_in_progress.clone(),
                                     ui_events.clone(),
                                     ui_events_dirty.clone(),
@@ -922,11 +1002,25 @@ impl Plugin for Dispatch {
                             }
                         }
 
-                        Action::SetPolyphony { voices } => {
-                            // 0 = infinite polyphony; any other value clamped to 1..=MAX_VOICES.
-                            let clamped = if voices == 0 { 0 } else { voices.clamp(1, MAX_VOICES as u32) };
-                            max_voices.store(clamped, Ordering::Relaxed);
-                            ctx.send_json(json!({ "type": "State", "maxVoices": clamped }));
+                        Action::SetBaseVoices { voices } => {
+                            // Only accept 16, 32, or 64; ignore anything else.
+                            let clamped = match voices {
+                                16 | 32 | 64 => voices,
+                                _ => 16,
+                            };
+                            base_voices.store(clamped, Ordering::Relaxed);
+                            ctx.send_json(json!({
+                                "type": "State",
+                                "baseVoices": clamped,
+                            }));
+                        }
+
+                        Action::SetAllowInfiniteVoices { enabled } => {
+                            allow_infinite_voices.store(enabled, Ordering::Relaxed);
+                            ctx.send_json(json!({
+                                "type": "State",
+                                "allowInfiniteVoices": enabled,
+                            }));
                         }
 
                         Action::SetRetrigger { enabled } => {
@@ -937,23 +1031,38 @@ impl Plugin for Dispatch {
                         Action::SetPadVolume { pad_index, volume } => {
                             if pad_index < PAD_COUNT {
                                 let clamped = volume.clamp(0.0, 2.0);
-                                setter.begin_set_parameter(&params.pads[pad_index].volume);
-                                setter.set_parameter(&params.pads[pad_index].volume, clamped);
-                                setter.end_set_parameter(&params.pads[pad_index].volume);
+                                setter.begin_set_parameter(
+                                    &params.pads[pad_index].volume,
+                                );
+                                setter.set_parameter(
+                                    &params.pads[pad_index].volume,
+                                    clamped,
+                                );
+                                setter.end_set_parameter(
+                                    &params.pads[pad_index].volume,
+                                );
                             }
                         }
 
                         Action::SetPadMono { pad_index, mono } => {
                             if pad_index < PAD_COUNT {
-                                setter.begin_set_parameter(&params.pads[pad_index].mono);
-                                setter.set_parameter(&params.pads[pad_index].mono, mono);
-                                setter.end_set_parameter(&params.pads[pad_index].mono);
+                                setter.begin_set_parameter(
+                                    &params.pads[pad_index].mono,
+                                );
+                                setter.set_parameter(
+                                    &params.pads[pad_index].mono,
+                                    mono,
+                                );
+                                setter.end_set_parameter(
+                                    &params.pads[pad_index].mono,
+                                );
                             }
                         }
 
-                        Action::SetPadNormalize { pad_index, normalize: norm } => {
+                        Action::SetPadNormalize { pad_index, normalize } => {
                             if pad_index < PAD_COUNT {
-                                normalize[pad_index].store(norm, Ordering::Relaxed);
+                                params.pad_normalizes.lock().unwrap()[pad_index] =
+                                    normalize;
                             }
                         }
 
@@ -966,23 +1075,21 @@ impl Plugin for Dispatch {
 
                         Action::DeletePad { pad_index } => {
                             if pad_index < PAD_COUNT {
-                                // Clear in-memory data first so the voice loop silences it.
                                 *pad_data[pad_index].lock().unwrap() = None;
 
-                                // Delete cached files. If a resample thread is mid-flight it
-                                // will fail to read the now-missing files and push a SampleError,
-                                // which the UI handles by clearing the pad state.
-                                let cd = params.cache_dir.lock().unwrap().clone();
-                                if let Some(ref cd) = cd {
-                                    let dir = pad_dir(cd, pad_index);
-                                    for file in &[
-                                        "sample.json",
-                                        "sample.array",
-                                        "resampled.json",
-                                        "resampled.array",
-                                    ] {
-                                        let _ = std::fs::remove_file(dir.join(file));
-                                    }
+                                let cache_dir_override =
+                                    params.cache_dir.lock().unwrap().clone();
+                                let effective_dir =
+                                    effective_cache_dir(&cache_dir_override);
+
+                                // Remove the UUID folder from cache and clear the key.
+                                let uuid = {
+                                    let mut uuids = params.pad_uuids.lock().unwrap();
+                                    uuids[pad_index].take()
+                                };
+                                if let Some(ref key) = uuid {
+                                    let dir = pad_dir(&effective_dir, key);
+                                    let _ = std::fs::remove_dir_all(&dir);
                                 }
 
                                 ctx.send_json(json!({
@@ -998,29 +1105,35 @@ impl Plugin for Dispatch {
                 if sample_rate_changed.swap(false, Ordering::Relaxed) {
                     let new_rate = project_sample_rate.load(Ordering::Relaxed);
                     if new_rate > 0 {
-                        let cd = params.cache_dir.lock().unwrap().clone();
-                        if let Some(ref cd) = cd {
-                            for pad_idx in 0..PAD_COUNT {
-                                if load_raw_meta(cd, pad_idx).is_none() {
-                                    continue;
-                                }
-                                if resample_in_progress[pad_idx].load(Ordering::Relaxed) {
-                                    continue;
-                                }
-                                if let Some(data) = load_resampled(cd, pad_idx, new_rate) {
-                                    *pad_data[pad_idx].lock().unwrap() = Some(data);
-                                } else {
-                                    resample_in_progress[pad_idx].store(true, Ordering::Relaxed);
-                                    spawn_pad_resample(
-                                        cd.clone(),
-                                        pad_idx,
-                                        new_rate,
-                                        pad_data.clone(),
-                                        resample_in_progress.clone(),
-                                        ui_events.clone(),
-                                        ui_events_dirty.clone(),
-                                    );
-                                }
+                        let cache_dir_override =
+                            params.cache_dir.lock().unwrap().clone();
+                        let effective_dir = effective_cache_dir(&cache_dir_override);
+                        let pad_uuids = params.pad_uuids.lock().unwrap().clone();
+                        for pad_idx in 0..PAD_COUNT {
+                            let Some(ref uuid) = pad_uuids[pad_idx] else {
+                                continue;
+                            };
+                            if load_raw_meta(&effective_dir, uuid).is_none() {
+                                continue;
+                            }
+                            if resample_in_progress[pad_idx].load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            if let Some(data) = load_resampled(&effective_dir, uuid, new_rate) {
+                                *pad_data[pad_idx].lock().unwrap() = Some(data);
+                            } else {
+                                resample_in_progress[pad_idx]
+                                    .store(true, Ordering::Relaxed);
+                                spawn_pad_resample(
+                                    effective_dir.clone(),
+                                    uuid.clone(),
+                                    new_rate,
+                                    pad_data.clone(),
+                                    pad_idx,
+                                    resample_in_progress.clone(),
+                                    ui_events.clone(),
+                                    ui_events_dirty.clone(),
+                                );
                             }
                         }
                     }
@@ -1028,7 +1141,8 @@ impl Plugin for Dispatch {
 
                 // Forward background thread events to UI
                 if ui_events_dirty.swap(false, Ordering::Relaxed) {
-                    let events: Vec<UiEvent> = ui_events.lock().unwrap().drain(..).collect();
+                    let events: Vec<UiEvent> =
+                        ui_events.lock().unwrap().drain(..).collect();
                     for event in events {
                         match event {
                             UiEvent::SampleLoaded { pad_index, name } => {

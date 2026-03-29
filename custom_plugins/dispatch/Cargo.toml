@@ -13,3 +13,4 @@ serde_json = "1.0"
 nih_plug_webview = { path = "../../nih-plug-webview" }
 ureq = "2.10.1"
 base64 = "0.22.1"
+directories = "6.0.0"
