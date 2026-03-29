@@ -255,6 +255,32 @@ enum Action {
         #[serde(rename = "padIndex")]
         pad_index: usize,
     },
+    /// Sent by the webview when the user presses spacebar, so we can forward
+    /// it to the DAW as a real WM_KEYDOWN event (play/pause transport).
+    Spacebar,
+}
+
+// ---------------------------------------------------------------------------
+// Windows helper: forward spacebar to the DAW window
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+fn forward_spacebar_to_daw() {
+    use winapi::um::winuser::{GetForegroundWindow, PostMessageW, WM_KEYDOWN, WM_KEYUP};
+
+    // VK_SPACE = 0x20; lParam encodes: scan code 0x39 (space), repeat count 1.
+    // WM_KEYUP also sets bits 30 (prev key-state) and 31 (transition state).
+    const VK_SPACE: usize = 0x20;
+    const LPARAM_DOWN: isize = 0x0039_0001; // scan 0x39, count 1
+    const LPARAM_UP: isize = 0xC039_0001_u32 as isize; // + bits 30+31
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if !hwnd.is_null() {
+            PostMessageW(hwnd, WM_KEYDOWN, VK_SPACE, LPARAM_DOWN);
+            PostMessageW(hwnd, WM_KEYUP, VK_SPACE, LPARAM_UP);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,6 +1225,11 @@ impl Plugin for Dispatch {
                                     "padIndex": pad_index,
                                 }));
                             }
+                        }
+
+                        Action::Spacebar => {
+                            #[cfg(windows)]
+                            forward_spacebar_to_daw();
                         }
                     }
                 }

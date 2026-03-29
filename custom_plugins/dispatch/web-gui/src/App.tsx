@@ -416,7 +416,24 @@ export default function App() {
     };
 
     sendToPluginSafe({ type: "Init" });
-    return () => { window.onPluginMessage = undefined; };
+
+    // Forward spacebar to the DAW as a play/pause transport command.
+    // Skip when an input/textarea is focused so typing still works normally.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA") {
+          e.preventDefault();
+          sendToPluginSafe({ type: "Spacebar" });
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.onPluginMessage = undefined;
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 
   const handleSetCustomDir = (path: string) => {
