@@ -9,6 +9,7 @@ type PluginMessage =
       baseVoices?: number;
       allowInfiniteVoices?: boolean;
       retrigger?: boolean;
+      respectNoteOffs?: boolean;
       masterGain?: number;
       velSensDb?: number;
       padVolumes?: number[];
@@ -161,19 +162,31 @@ function CacheDirBar({
 }
 
 // ---------------------------------------------------------------------------
-// Pad Grid
+// Pad Grid (with per-pad volume / mono / normalize controls)
 // ---------------------------------------------------------------------------
 
 function PadGrid({
   activePads,
   padStates,
+  padVolumes,
+  padMonos,
+  padNormalizes,
   onSampleDrop,
   onDeletePad,
+  onVolumeChange,
+  onMonoChange,
+  onNormalizeChange,
 }: {
   activePads: Set<number>;
   padStates: PadState[];
+  padVolumes: number[];
+  padMonos: boolean[];
+  padNormalizes: boolean[];
   onSampleDrop: (padIndex: number, file: File) => void;
   onDeletePad: (padIndex: number) => void;
+  onVolumeChange: (padIndex: number, volume: number) => void;
+  onMonoChange: (padIndex: number, mono: boolean) => void;
+  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
 }) {
   const [dragOverPad, setDragOverPad] = useState<number | null>(null);
 
@@ -186,6 +199,8 @@ function PadGrid({
         const isActive = activePads.has(i);
         const isDragOver = dragOverPad === i;
         const pad = padStates[i];
+        const vol = padVolumes[i];
+        const volLabel = vol === 1.0 ? "0dB" : vol === 0 ? "−∞" : `${((vol - 1) * 100).toFixed(0)}%`;
 
         return (
           <div
@@ -212,12 +227,16 @@ function PadGrid({
               if (file) onSampleDrop(i, file);
             }}
           >
-            <div className="pad-label">
-              {pad ? (
-                pad.name
-              ) : (
-                <span className="pad-label--empty">{i + 1}</span>
-              )}
+            {/* Top row: note + name + delete */}
+            <div className="pad-top">
+              <span className="pad-note">{noteName}</span>
+              <span className="pad-name">
+                {pad ? (
+                  pad.loading ? "resampling…" : pad.name
+                ) : (
+                  <span className="pad-name--empty">{i + 1}</span>
+                )}
+              </span>
               {pad && !pad.loading && (
                 <button
                   className="pad-delete-btn"
@@ -228,9 +247,39 @@ function PadGrid({
                 </button>
               )}
             </div>
-            <div className="pad-note">{noteName}</div>
-            <div className={`pad-sample ${pad ? "" : "pad-sample--empty"}`}>
-              {pad?.loading ? "resampling…" : pad ? pad.name : "drop sample"}
+
+            {/* Drop hint when empty */}
+            {!pad && (
+              <div className="pad-drop-hint">drop sample</div>
+            )}
+
+            {/* Bottom row: N/M toggles + volume slider + value */}
+            <div className="pad-controls">
+              <button
+                className={`pad-ctrl-btn${padNormalizes[i] ? " pad-ctrl-btn--on" : ""}`}
+                onClick={(e) => { e.stopPropagation(); onNormalizeChange(i, !padNormalizes[i]); }}
+                title="Normalize (pre-scale to peak = 1.0)"
+              >
+                N
+              </button>
+              <button
+                className={`pad-ctrl-btn${padMonos[i] ? " pad-ctrl-btn--on" : ""}`}
+                onClick={(e) => { e.stopPropagation(); onMonoChange(i, !padMonos[i]); }}
+                title="Force mono"
+              >
+                M
+              </button>
+              <input
+                type="range"
+                className="pad-vol-slider"
+                min={0}
+                max={2}
+                step={0.01}
+                value={vol}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { e.stopPropagation(); onVolumeChange(i, Number(e.target.value)); }}
+              />
+              <span className="pad-vol-val">{volLabel}</span>
             </div>
           </div>
         );
@@ -240,112 +289,52 @@ function PadGrid({
 }
 
 // ---------------------------------------------------------------------------
-// Mixer
+// Master Bar (OUT + VEL)
 // ---------------------------------------------------------------------------
 
-function Mixer({
-  padStates,
+function MasterBar({
   masterGain,
   velSensDb,
-  padVolumes,
-  padMonos,
-  padNormalizes,
   onMasterGainChange,
   onVelSensChange,
-  onVolumeChange,
-  onMonoChange,
-  onNormalizeChange,
 }: {
-  padStates: PadState[];
   masterGain: number;
   velSensDb: number;
-  padVolumes: number[];
-  padMonos: boolean[];
-  padNormalizes: boolean[];
   onMasterGainChange: (gain: number) => void;
   onVelSensChange: (sensDb: number) => void;
-  onVolumeChange: (padIndex: number, volume: number) => void;
-  onMonoChange: (padIndex: number, mono: boolean) => void;
-  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
 }) {
   const fmtGain = (db: number) =>
     db === 0 ? "0 dB" : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
 
   return (
-    <div className="mixer-section">
-      {Array.from({ length: PAD_COUNT }, (_, i) => (
-        <div key={i} className="mixer-channel">
-          <span className="mixer-label">
-            {padStates[i]?.name ?? String(i + 1)}
-          </span>
-          <div className="mixer-fader-wrap">
-            <input
-              type="range"
-              className="mixer-fader"
-              min={0}
-              max={2}
-              step={0.01}
-              value={padVolumes[i]}
-              onChange={(e) => onVolumeChange(i, Number(e.target.value))}
-            />
-          </div>
-          <div className="mixer-btns">
-            <button
-              className={`mixer-btn${padNormalizes[i] ? " mixer-btn--on" : ""}`}
-              onClick={() => onNormalizeChange(i, !padNormalizes[i])}
-              title="Normalize (pre-scale to peak = 1.0)"
-            >
-              N
-            </button>
-            <button
-              className={`mixer-btn${padMonos[i] ? " mixer-btn--on" : ""}`}
-              onClick={() => onMonoChange(i, !padMonos[i])}
-              title="Force mono"
-            >
-              M
-            </button>
-          </div>
-          <span className="mixer-val">
-            {padVolumes[i] === 1.0
-              ? "0dB"
-              : padVolumes[i] === 0
-              ? "−∞"
-              : `${((padVolumes[i] - 1) * 100).toFixed(0)}%`}
-          </span>
-        </div>
-      ))}
-
-      <div className="mixer-master">
-        <span className="mixer-label">OUT</span>
-        <div className="mixer-fader-wrap">
-          <input
-            type="range"
-            className="mixer-fader"
-            min={-15}
-            max={9}
-            step={0.1}
-            value={masterGain}
-            onChange={(e) => onMasterGainChange(Number(e.target.value))}
-          />
-        </div>
-        <span className="mixer-val">{fmtGain(masterGain)}</span>
+    <div className="master-bar">
+      <div className="master-ctrl">
+        <span className="master-label">OUT</span>
+        <input
+          type="range"
+          className="master-slider"
+          min={-15}
+          max={9}
+          step={0.1}
+          value={masterGain}
+          onChange={(e) => onMasterGainChange(Number(e.target.value))}
+        />
+        <span className="master-val">{fmtGain(masterGain)}</span>
       </div>
-
-      <div className="mixer-master">
-        <span className="mixer-label">VEL</span>
-        <div className="mixer-fader-wrap">
-          <input
-            type="range"
-            className="mixer-fader"
-            min={-60}
-            max={0}
-            step={0.5}
-            value={velSensDb}
-            onChange={(e) => onVelSensChange(Number(e.target.value))}
-            title="Velocity sensitivity: at 0 dB velocity has no effect; at −60 dB full velocity range applies"
-          />
-        </div>
-        <span className="mixer-val">
+      <div className="master-sep" />
+      <div className="master-ctrl">
+        <span className="master-label">VEL</span>
+        <input
+          type="range"
+          className="master-slider"
+          min={-60}
+          max={0}
+          step={0.5}
+          value={velSensDb}
+          onChange={(e) => onVelSensChange(Number(e.target.value))}
+          title="Velocity sensitivity: at 0 dB velocity has no effect; at −60 dB full velocity range applies"
+        />
+        <span className="master-val">
           {velSensDb >= 0 ? "off" : `${velSensDb.toFixed(0)}dB`}
         </span>
       </div>
@@ -366,6 +355,7 @@ export default function App() {
   const [baseVoices, setBaseVoices] = useState<16 | 32 | 64>(16);
   const [allowInfiniteVoices, setAllowInfiniteVoices] = useState(true);
   const [retrigger, setRetrigger] = useState(true);
+  const [respectNoteOffs, setRespectNoteOffs] = useState(true);
   const [masterGain, setMasterGain] = useState(0);
   const [velSensDb, setVelSensDb] = useState(-60);
   const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
@@ -388,6 +378,7 @@ export default function App() {
         if (msg.baseVoices != null) setBaseVoices(msg.baseVoices as 16 | 32 | 64);
         if (msg.allowInfiniteVoices != null) setAllowInfiniteVoices(msg.allowInfiniteVoices);
         if (msg.retrigger != null) setRetrigger(msg.retrigger);
+        if (msg.respectNoteOffs != null) setRespectNoteOffs(msg.respectNoteOffs);
         if (msg.masterGain != null) setMasterGain(msg.masterGain);
         if (msg.velSensDb != null) setVelSensDb(msg.velSensDb);
         if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
@@ -531,6 +522,11 @@ export default function App() {
     sendToPluginSafe({ type: "SetRetrigger", enabled });
   };
 
+  const handleRespectNoteOffsChange = (enabled: boolean) => {
+    setRespectNoteOffs(enabled);
+    sendToPluginSafe({ type: "SetRespectNoteOffs", enabled });
+  };
+
   return (
     <div className="app">
       <header className="app-header">
@@ -567,6 +563,19 @@ export default function App() {
               {retrigger ? "on" : "off"}
             </button>
           </div>
+
+          <div className="ctrl-sep" />
+
+          <div className="ctrl-group">
+            <label className="ctrl-label">note offs</label>
+            <button
+              className={`ctrl-toggle ${respectNoteOffs ? "ctrl-toggle--on" : ""}`}
+              onClick={() => handleRespectNoteOffsChange(!respectNoteOffs)}
+              title="When on, a NoteOff stops the playing sample on that pad"
+            >
+              {respectNoteOffs ? "on" : "off"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -578,21 +587,25 @@ export default function App() {
       />
 
       <main className="app-main">
-        <PadGrid activePads={activePads} padStates={padStates} onSampleDrop={handleSampleDrop} onDeletePad={handleDeletePad} />
+        <PadGrid
+          activePads={activePads}
+          padStates={padStates}
+          padVolumes={padVolumes}
+          padMonos={padMonos}
+          padNormalizes={padNormalizes}
+          onSampleDrop={handleSampleDrop}
+          onDeletePad={handleDeletePad}
+          onVolumeChange={handlePadVolumeChange}
+          onMonoChange={handlePadMonoChange}
+          onNormalizeChange={handlePadNormalizeChange}
+        />
       </main>
 
-      <Mixer
-        padStates={padStates}
+      <MasterBar
         masterGain={masterGain}
         velSensDb={velSensDb}
-        padVolumes={padVolumes}
-        padMonos={padMonos}
-        padNormalizes={padNormalizes}
         onMasterGainChange={handleMasterGainChange}
         onVelSensChange={handleVelSensChange}
-        onVolumeChange={handlePadVolumeChange}
-        onMonoChange={handlePadMonoChange}
-        onNormalizeChange={handlePadNormalizeChange}
       />
 
       <footer className="app-footer">

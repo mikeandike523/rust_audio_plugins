@@ -225,6 +225,9 @@ enum Action {
     SetRetrigger {
         enabled: bool,
     },
+    SetRespectNoteOffs {
+        enabled: bool,
+    },
     SetPadVolume {
         #[serde(rename = "padIndex")]
         pad_index: usize,
@@ -504,6 +507,7 @@ pub struct Dispatch {
     /// When true, voices grow unboundedly. When false, base_voices is the cap.
     allow_infinite_voices: Arc<AtomicBool>,
     retrigger: Arc<AtomicBool>,
+    respect_note_offs: Arc<AtomicBool>,
 
     ui_events: Arc<Mutex<Vec<UiEvent>>>,
     ui_events_dirty: Arc<AtomicBool>,
@@ -523,6 +527,7 @@ impl Default for Dispatch {
             base_voices: Arc::new(AtomicU32::new(16)),
             allow_infinite_voices: Arc::new(AtomicBool::new(true)),
             retrigger: Arc::new(AtomicBool::new(true)),
+            respect_note_offs: Arc::new(AtomicBool::new(true)),
             ui_events: Arc::new(Mutex::new(Vec::new())),
             ui_events_dirty: Arc::new(AtomicBool::new(false)),
             resample_in_progress: Arc::new(
@@ -733,6 +738,7 @@ impl Plugin for Dispatch {
         let pad_normalizes = self.params.pad_normalizes.lock().unwrap().clone();
         // Precompute velocity floor once per buffer.
         let vel_floor = 10f32.powf(self.params.vel_sens_db.value() / 20.0);
+        let respect_note_offs = self.respect_note_offs.load(Ordering::Relaxed);
 
         for (sample_id, channels) in buffer.iter_samples().enumerate() {
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -743,6 +749,39 @@ impl Plugin for Dispatch {
                             let pad_idx = (n - PAD_MIDI_BASE) as usize;
                             if pad_idx < PAD_COUNT {
                                 self.trigger_pad(pad_idx, *velocity);
+                            }
+                        }
+                    }
+                    NoteEvent::NoteOff { note, .. } => {
+                        // NoteOn with velocity==0 is sorted before NoteOn>0 by off_first, so it
+                        // won't re-trigger a voice before this silences it.
+                        if respect_note_offs {
+                            let n = *note;
+                            if n >= PAD_MIDI_BASE {
+                                let pad_idx = (n - PAD_MIDI_BASE) as usize;
+                                if pad_idx < PAD_COUNT {
+                                    for v in self.voices.iter_mut() {
+                                        if v.active && v.pad_index == pad_idx {
+                                            v.active = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // NoteOn velocity==0 is the MIDI running-status form of note-off.
+                    NoteEvent::NoteOn { note, velocity, .. } if *velocity == 0.0 => {
+                        if respect_note_offs {
+                            let n = *note;
+                            if n >= PAD_MIDI_BASE {
+                                let pad_idx = (n - PAD_MIDI_BASE) as usize;
+                                if pad_idx < PAD_COUNT {
+                                    for v in self.voices.iter_mut() {
+                                        if v.active && v.pad_index == pad_idx {
+                                            v.active = false;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -828,6 +867,7 @@ impl Plugin for Dispatch {
         let base_voices = self.base_voices.clone();
         let allow_infinite_voices = self.allow_infinite_voices.clone();
         let retrigger = self.retrigger.clone();
+        let respect_note_offs = self.respect_note_offs.clone();
         let ui_events = self.ui_events.clone();
         let ui_events_dirty = self.ui_events_dirty.clone();
         let resample_in_progress = self.resample_in_progress.clone();
@@ -871,6 +911,7 @@ impl Plugin for Dispatch {
                                 "baseVoices": base_voices.load(Ordering::Relaxed),
                                 "allowInfiniteVoices": allow_infinite_voices.load(Ordering::Relaxed),
                                 "retrigger": retrigger.load(Ordering::Relaxed),
+                                "respectNoteOffs": respect_note_offs.load(Ordering::Relaxed),
                                 "masterGain": params.master_gain.value(),
                                 "velSensDb": params.vel_sens_db.value(),
                                 "padVolumes": pad_vols,
@@ -1075,6 +1116,11 @@ impl Plugin for Dispatch {
                         Action::SetRetrigger { enabled } => {
                             retrigger.store(enabled, Ordering::Relaxed);
                             ctx.send_json(json!({ "type": "State", "retrigger": enabled }));
+                        }
+
+                        Action::SetRespectNoteOffs { enabled } => {
+                            respect_note_offs.store(enabled, Ordering::Relaxed);
+                            ctx.send_json(json!({ "type": "State", "respectNoteOffs": enabled }));
                         }
 
                         Action::SetPadVolume { pad_index, volume } => {
