@@ -153,6 +153,11 @@ struct DispatchParams {
     #[id = "master_gain"]
     pub master_gain: FloatParam,
 
+    /// Velocity sensitivity. At 0 dB the velocity has no effect (always full
+    /// volume). At −60 dB, a velocity of 0 results in roughly −60 dB of gain.
+    #[id = "vel_sens"]
+    pub vel_sens_db: FloatParam,
+
     /// One channel-strip per pad; IDs become e.g. "vol_1" … "vol_16" in the DAW.
     #[nested(array, group = "Pad")]
     pub pads: [PadChannelParams; PAD_COUNT],
@@ -168,6 +173,12 @@ impl Default for DispatchParams {
                 "Master Gain",
                 0.0,
                 FloatRange::Linear { min: -15.0, max: 9.0 },
+            )
+            .with_unit(" dB"),
+            vel_sens_db: FloatParam::new(
+                "Velocity Sensitivity",
+                -60.0,
+                FloatRange::Linear { min: -60.0, max: 0.0 },
             )
             .with_unit(" dB"),
             pads: std::array::from_fn(|i| PadChannelParams {
@@ -232,6 +243,10 @@ enum Action {
     SetMasterGain {
         #[serde(rename = "gainDb")]
         gain_db: f32,
+    },
+    SetVelSens {
+        #[serde(rename = "sensDb")]
+        sens_db: f32,
     },
     DeletePad {
         #[serde(rename = "padIndex")]
@@ -647,6 +662,36 @@ impl Plugin for Dispatch {
         self.voices
             .reserve(INFINITE_POLY_PREALLOCATE.max(MAX_FINITE_VOICES));
         self.voices.resize_with(MAX_FINITE_VOICES, Voice::idle);
+
+        // Populate pad_data immediately so audio works even if the editor is
+        // never opened. Without this, pad_data stays None until the webview
+        // sends Action::Init (only happens when the FX panel is opened),
+        // causing silence on first project load.
+        let cache_dir_override = self.params.cache_dir.lock().unwrap().clone();
+        let effective_dir = effective_cache_dir(&cache_dir_override);
+        let pad_uuids = self.params.pad_uuids.lock().unwrap().clone();
+        for pad_idx in 0..PAD_COUNT {
+            let Some(ref uuid) = pad_uuids[pad_idx] else { continue };
+            if self.resample_in_progress[pad_idx].load(Ordering::Relaxed) {
+                continue;
+            }
+            if let Some(data) = load_resampled(&effective_dir, uuid, sr) {
+                *self.pad_data[pad_idx].lock().unwrap() = Some(data);
+            } else if load_raw_meta(&effective_dir, uuid).is_some() {
+                self.resample_in_progress[pad_idx].store(true, Ordering::Relaxed);
+                spawn_pad_resample(
+                    effective_dir.clone(),
+                    uuid.clone(),
+                    sr,
+                    self.pad_data.clone(),
+                    pad_idx,
+                    self.resample_in_progress.clone(),
+                    self.ui_events.clone(),
+                    self.ui_events_dirty.clone(),
+                );
+            }
+        }
+
         true
     }
 
@@ -686,6 +731,8 @@ impl Plugin for Dispatch {
 
         // Lock pad_normalizes once per buffer, not per sample.
         let pad_normalizes = self.params.pad_normalizes.lock().unwrap().clone();
+        // Precompute velocity floor once per buffer.
+        let vel_floor = 10f32.powf(self.params.vel_sens_db.value() / 20.0);
 
         for (sample_id, channels) in buffer.iter_samples().enumerate() {
             for evt in events.iter().filter(|e| e.timing() as usize == sample_id) {
@@ -722,7 +769,8 @@ impl Plugin for Dispatch {
                                 } else {
                                     1.0
                                 };
-                                let gain = v.velocity_gain * vol * norm_scale;
+                                let vel_gain = vel_floor + (1.0 - vel_floor) * v.velocity_gain;
+                                let gain = vel_gain * vol * norm_scale;
                                 let l_raw = data.data[fi] * gain;
                                 let r_raw = if data.channels > 1 {
                                     data.data[fi + 1] * gain
@@ -824,6 +872,7 @@ impl Plugin for Dispatch {
                                 "allowInfiniteVoices": allow_infinite_voices.load(Ordering::Relaxed),
                                 "retrigger": retrigger.load(Ordering::Relaxed),
                                 "masterGain": params.master_gain.value(),
+                                "velSensDb": params.vel_sens_db.value(),
                                 "padVolumes": pad_vols,
                                 "padMonos": pad_monos,
                                 "padNormalizes": pad_normalizes,
@@ -1071,6 +1120,13 @@ impl Plugin for Dispatch {
                             setter.begin_set_parameter(&params.master_gain);
                             setter.set_parameter(&params.master_gain, clamped);
                             setter.end_set_parameter(&params.master_gain);
+                        }
+
+                        Action::SetVelSens { sens_db } => {
+                            let clamped = sens_db.clamp(-60.0, 0.0);
+                            setter.begin_set_parameter(&params.vel_sens_db);
+                            setter.set_parameter(&params.vel_sens_db, clamped);
+                            setter.end_set_parameter(&params.vel_sens_db);
                         }
 
                         Action::DeletePad { pad_index } => {

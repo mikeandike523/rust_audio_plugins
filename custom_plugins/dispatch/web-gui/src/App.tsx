@@ -10,6 +10,7 @@ type PluginMessage =
       allowInfiniteVoices?: boolean;
       retrigger?: boolean;
       masterGain?: number;
+      velSensDb?: number;
       padVolumes?: number[];
       padMonos?: boolean[];
       padNormalizes?: boolean[];
@@ -245,20 +246,24 @@ function PadGrid({
 function Mixer({
   padStates,
   masterGain,
+  velSensDb,
   padVolumes,
   padMonos,
   padNormalizes,
   onMasterGainChange,
+  onVelSensChange,
   onVolumeChange,
   onMonoChange,
   onNormalizeChange,
 }: {
   padStates: PadState[];
   masterGain: number;
+  velSensDb: number;
   padVolumes: number[];
   padMonos: boolean[];
   padNormalizes: boolean[];
   onMasterGainChange: (gain: number) => void;
+  onVelSensChange: (sensDb: number) => void;
   onVolumeChange: (padIndex: number, volume: number) => void;
   onMonoChange: (padIndex: number, mono: boolean) => void;
   onNormalizeChange: (padIndex: number, normalize: boolean) => void;
@@ -325,6 +330,25 @@ function Mixer({
         </div>
         <span className="mixer-val">{fmtGain(masterGain)}</span>
       </div>
+
+      <div className="mixer-master">
+        <span className="mixer-label">VEL</span>
+        <div className="mixer-fader-wrap">
+          <input
+            type="range"
+            className="mixer-fader"
+            min={-60}
+            max={0}
+            step={0.5}
+            value={velSensDb}
+            onChange={(e) => onVelSensChange(Number(e.target.value))}
+            title="Velocity sensitivity: at 0 dB velocity has no effect; at −60 dB full velocity range applies"
+          />
+        </div>
+        <span className="mixer-val">
+          {velSensDb >= 0 ? "off" : `${velSensDb.toFixed(0)}dB`}
+        </span>
+      </div>
     </div>
   );
 }
@@ -343,6 +367,7 @@ export default function App() {
   const [allowInfiniteVoices, setAllowInfiniteVoices] = useState(true);
   const [retrigger, setRetrigger] = useState(true);
   const [masterGain, setMasterGain] = useState(0);
+  const [velSensDb, setVelSensDb] = useState(-60);
   const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
   const [padMonos, setPadMonos] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
   const [padNormalizes, setPadNormalizes] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
@@ -364,6 +389,7 @@ export default function App() {
         if (msg.allowInfiniteVoices != null) setAllowInfiniteVoices(msg.allowInfiniteVoices);
         if (msg.retrigger != null) setRetrigger(msg.retrigger);
         if (msg.masterGain != null) setMasterGain(msg.masterGain);
+        if (msg.velSensDb != null) setVelSensDb(msg.velSensDb);
         if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
         if (msg.padMonos != null) setPadMonos(msg.padMonos);
         if (msg.padNormalizes != null) setPadNormalizes(msg.padNormalizes);
@@ -444,6 +470,21 @@ export default function App() {
     sendToPluginSafe({ type: "SetMasterGain", gainDb: gain });
   };
 
+  const handleVelSensChange = (sensDb: number) => {
+    setVelSensDb(sensDb);
+    sendToPluginSafe({ type: "SetVelSens", sensDb });
+  };
+
+  const handleVoiceModeChange = (value: string) => {
+    if (value === "inf") {
+      handleAllowInfiniteVoicesChange(true);
+    } else {
+      const n = Number(value) as 16 | 32 | 64;
+      if (allowInfiniteVoices) handleAllowInfiniteVoicesChange(false);
+      handleBaseVoicesChange(n);
+    }
+  };
+
   const handleDeletePad = (padIndex: number) => {
     sendToPluginSafe({ type: "DeletePad", padIndex });
   };
@@ -499,34 +540,33 @@ export default function App() {
         </div>
 
         <div className="app-controls">
-          <label className="ctrl-label">voices</label>
-          <select
-            className="ctrl-select"
-            value={baseVoices}
-            disabled={allowInfiniteVoices}
-            onChange={(e) => handleBaseVoicesChange(Number(e.target.value) as 16 | 32 | 64)}
-          >
-            <option value={16}>16</option>
-            <option value={32}>32</option>
-            <option value={64}>64</option>
-          </select>
+          <div className="ctrl-group">
+            <label className="ctrl-label">polyphony</label>
+            <select
+              className="ctrl-select"
+              value={allowInfiniteVoices ? "inf" : String(baseVoices)}
+              onChange={(e) => handleVoiceModeChange(e.target.value)}
+              title="Maximum simultaneous voices. ∞ grows without limit."
+            >
+              <option value="16">16 voices</option>
+              <option value="32">32 voices</option>
+              <option value="64">64 voices</option>
+              <option value="inf">∞ voices</option>
+            </select>
+          </div>
 
-          <label className="ctrl-label">∞ voices</label>
-          <button
-            className={`ctrl-toggle ${allowInfiniteVoices ? "ctrl-toggle--on" : ""}`}
-            onClick={() => handleAllowInfiniteVoicesChange(!allowInfiniteVoices)}
-            title="When on, voices grow without limit. When off, base voice count is the cap."
-          >
-            {allowInfiniteVoices ? "on" : "off"}
-          </button>
+          <div className="ctrl-sep" />
 
-          <label className="ctrl-label">retrigger</label>
-          <button
-            className={`ctrl-toggle ${retrigger ? "ctrl-toggle--on" : ""}`}
-            onClick={() => handleRetriggerChange(!retrigger)}
-          >
-            {retrigger ? "on" : "off"}
-          </button>
+          <div className="ctrl-group">
+            <label className="ctrl-label">retrigger</label>
+            <button
+              className={`ctrl-toggle ${retrigger ? "ctrl-toggle--on" : ""}`}
+              onClick={() => handleRetriggerChange(!retrigger)}
+              title="When on, re-hitting a pad restarts the sample instead of layering a new voice"
+            >
+              {retrigger ? "on" : "off"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -544,10 +584,12 @@ export default function App() {
       <Mixer
         padStates={padStates}
         masterGain={masterGain}
+        velSensDb={velSensDb}
         padVolumes={padVolumes}
         padMonos={padMonos}
         padNormalizes={padNormalizes}
         onMasterGainChange={handleMasterGainChange}
+        onVelSensChange={handleVelSensChange}
         onVolumeChange={handlePadVolumeChange}
         onMonoChange={handlePadMonoChange}
         onNormalizeChange={handlePadNormalizeChange}

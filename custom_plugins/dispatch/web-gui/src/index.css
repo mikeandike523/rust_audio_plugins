@@ -90,6 +90,20 @@ body {
   text-transform: uppercase;
 }
 
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctrl-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
 .ctrl-select {
   background: var(--surface2);
   border: 1px solid var(--border);
