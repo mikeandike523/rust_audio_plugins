@@ -136,47 +136,88 @@ body {
   animation: pad-pulse 1.1s ease-in-out infinite;
 }
 
-.cache-status {
+/* ── Cache Dir Bar ──────────────────────────────────────────── */
+
+.cache-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 5px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
   font-size: 11px;
-  color: var(--text-muted);
-  max-width: 420px;
-}
-
-.cache-icon {
-  font-size: 13px;
-}
-
-.cache-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  max-width: 360px;
-}
-
-.cache-clear-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
   flex-shrink: 0;
 }
 
-.cache-clear-btn:hover {
-  background: var(--border);
+.cache-bar-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.cache-bar-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.cache-bar-path--default {
+  color: var(--text-muted);
+}
+
+.cache-bar-path--custom {
   color: var(--text);
 }
 
-.cache-missing {
-  color: var(--red);
+.cache-bar-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  letter-spacing: 0.04em;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.cache-bar-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.cache-bar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.cache-bar-btn--confirm {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cache-bar-btn--danger:hover {
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+}
+
+.cache-bar-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 3px 8px;
   font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
 }
 
 .app-main {

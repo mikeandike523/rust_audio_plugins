@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 type PluginMessage =
   | {
       type: "State";
-      cacheDir?: string | null;
-      needsCacheDir?: boolean;
+      cacheDirOverride?: string | null;
+      effectiveCacheDir?: string;
       pluginVersion?: string;
-      maxVoices?: number;
+      baseVoices?: number;
+      allowInfiniteVoices?: boolean;
       retrigger?: boolean;
       masterGain?: number;
       padVolumes?: number[];
@@ -52,7 +53,6 @@ async function decodeAudioFile(file: File): Promise<{
     audioBuffer.getChannelData(i)
   );
 
-  // Interleave channels into one Float32Array
   const interleaved = new Float32Array(length * numberOfChannels);
   for (let frame = 0; frame < length; frame++) {
     for (let ch = 0; ch < numberOfChannels; ch++) {
@@ -60,7 +60,6 @@ async function decodeAudioFile(file: File): Promise<{
     }
   }
 
-  // Base64 encode raw bytes
   const bytes = new Uint8Array(interleaved.buffer);
   let binary = "";
   const chunkSize = 0x8000;
@@ -72,38 +71,90 @@ async function decodeAudioFile(file: File): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// Cache Dir Setup Screen
+// Cache Dir Bar
 // ---------------------------------------------------------------------------
 
-function CacheDirSetup({ onConfirm }: { onConfirm: (path: string) => void }) {
+function CacheDirBar({
+  cacheDirOverride,
+  effectiveCacheDir,
+  onSetCustomDir,
+  onRemoveCustomDir,
+}: {
+  cacheDirOverride: string | null;
+  effectiveCacheDir: string;
+  onSetCustomDir: (path: string) => void;
+  onRemoveCustomDir: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
   const [input, setInput] = useState("");
-  const handleSubmit = () => {
-    const t = input.trim();
-    if (t) onConfirm(t);
+
+  const startEdit = () => {
+    setInput(cacheDirOverride ?? "");
+    setEditing(true);
   };
+
+  const confirmEdit = () => {
+    const t = input.trim();
+    if (t) {
+      onSetCustomDir(t);
+    }
+    setEditing(false);
+  };
+
+  const handleRemove = () => {
+    const ok = window.confirm(
+      "Remove the custom cache directory override?\n\n" +
+      "The plugin will revert to the default location:\n" +
+      "  " + effectiveCacheDir + "\n\n" +
+      "Samples already in the old custom directory will NOT be moved. " +
+      "Any pads pointing to that directory will be unloaded."
+    );
+    if (ok) onRemoveCustomDir();
+  };
+
   return (
-    <div className="setup-overlay">
-      <div className="setup-card">
-        <div className="setup-icon">📁</div>
-        <h2 className="setup-title">Choose a Cache Directory</h2>
-        <p className="setup-desc">
-          Dispatch needs a folder to store cached samples and project data.
-        </p>
-        <input
-          className="setup-input"
-          type="text"
-          placeholder="e.g. C:\Users\you\Music\dispatch-cache"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          autoFocus
-          spellCheck={false}
-        />
-        <button className="setup-btn" onClick={handleSubmit} disabled={!input.trim()}>
-          Set Cache Directory
-        </button>
-        <p className="setup-hint">Tip: paste a full path. The folder will be created if needed.</p>
-      </div>
+    <div className="cache-bar">
+      <span className="cache-bar-label">cache</span>
+
+      {editing ? (
+        <>
+          <input
+            className="cache-bar-input"
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirmEdit();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            autoFocus
+            spellCheck={false}
+          />
+          <button className="cache-bar-btn cache-bar-btn--confirm" onClick={confirmEdit} disabled={!input.trim()}>
+            ok
+          </button>
+          <button className="cache-bar-btn" onClick={() => setEditing(false)}>
+            cancel
+          </button>
+        </>
+      ) : (
+        <>
+          <span
+            className={`cache-bar-path ${cacheDirOverride ? "cache-bar-path--custom" : "cache-bar-path--default"}`}
+            title={effectiveCacheDir}
+          >
+            {cacheDirOverride ? effectiveCacheDir : `${effectiveCacheDir} (default)`}
+          </span>
+          <button className="cache-bar-btn" onClick={startEdit} title="Set a custom cache directory">
+            set custom
+          </button>
+          {cacheDirOverride && (
+            <button className="cache-bar-btn cache-bar-btn--danger" onClick={handleRemove} title="Revert to default cache directory">
+              remove custom
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -283,12 +334,13 @@ function Mixer({
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [cacheDir, setCacheDir] = useState<string | null>(null);
-  const [needsCacheDir, setNeedsCacheDir] = useState(false);
+  const [cacheDirOverride, setCacheDirOverride] = useState<string | null>(null);
+  const [effectiveCacheDir, setEffectiveCacheDir] = useState<string>("");
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
   const [activePads] = useState<Set<number>>(new Set());
   const [padStates, setPadStates] = useState<PadState[]>(Array(PAD_COUNT).fill(null));
-  const [maxVoices, setMaxVoices] = useState<0 | 16 | 32 | 64>(16);
+  const [baseVoices, setBaseVoices] = useState<16 | 32 | 64>(16);
+  const [allowInfiniteVoices, setAllowInfiniteVoices] = useState(true);
   const [retrigger, setRetrigger] = useState(true);
   const [masterGain, setMasterGain] = useState(0);
   const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
@@ -305,10 +357,11 @@ export default function App() {
     window.onPluginMessage = (raw: unknown) => {
       const msg = raw as PluginMessage;
       if (msg.type === "State") {
-        if (msg.cacheDir !== undefined) setCacheDir(msg.cacheDir);
-        if (msg.needsCacheDir !== undefined) setNeedsCacheDir(msg.needsCacheDir);
+        if (msg.cacheDirOverride !== undefined) setCacheDirOverride(msg.cacheDirOverride ?? null);
+        if (msg.effectiveCacheDir != null) setEffectiveCacheDir(msg.effectiveCacheDir);
         if (msg.pluginVersion != null) setPluginVersion(msg.pluginVersion);
-        if (msg.maxVoices != null) setMaxVoices(msg.maxVoices as 0 | 16 | 32 | 64);
+        if (msg.baseVoices != null) setBaseVoices(msg.baseVoices as 16 | 32 | 64);
+        if (msg.allowInfiniteVoices != null) setAllowInfiniteVoices(msg.allowInfiniteVoices);
         if (msg.retrigger != null) setRetrigger(msg.retrigger);
         if (msg.masterGain != null) setMasterGain(msg.masterGain);
         if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
@@ -349,8 +402,14 @@ export default function App() {
     return () => { window.onPluginMessage = undefined; };
   }, []);
 
-  const handleCacheDirConfirm = (path: string) => sendToPluginSafe({ type: "SetCacheDir", path });
-  const handleClearCacheDir = () => sendToPluginSafe({ type: "ClearCacheDir" });
+  const handleSetCustomDir = (path: string) => {
+    sendToPluginSafe({ type: "SetCacheDir", path });
+  };
+
+  const handleRemoveCustomDir = () => {
+    setPadStates(Array(PAD_COUNT).fill(null));
+    sendToPluginSafe({ type: "ClearCacheDir" });
+  };
 
   const handleSampleDrop = async (padIndex: number, file: File) => {
     const displayName = file.name.replace(/\.[^/.]+$/, "");
@@ -416,9 +475,14 @@ export default function App() {
     sendToPluginSafe({ type: "SetPadVolume", padIndex, volume });
   };
 
-  const handlePolyphonyChange = (v: 0 | 16 | 32 | 64) => {
-    setMaxVoices(v);
-    sendToPluginSafe({ type: "SetPolyphony", voices: v });
+  const handleBaseVoicesChange = (v: 16 | 32 | 64) => {
+    setBaseVoices(v);
+    sendToPluginSafe({ type: "SetBaseVoices", voices: v });
+  };
+
+  const handleAllowInfiniteVoicesChange = (enabled: boolean) => {
+    setAllowInfiniteVoices(enabled);
+    sendToPluginSafe({ type: "SetAllowInfiniteVoices", enabled });
   };
 
   const handleRetriggerChange = (enabled: boolean) => {
@@ -428,8 +492,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {needsCacheDir && <CacheDirSetup onConfirm={handleCacheDirConfirm} />}
-
       <header className="app-header">
         <div className="app-title">
           <span className="app-name">DISPATCH</span>
@@ -440,14 +502,23 @@ export default function App() {
           <label className="ctrl-label">voices</label>
           <select
             className="ctrl-select"
-            value={maxVoices}
-            onChange={(e) => handlePolyphonyChange(Number(e.target.value) as 0 | 16 | 32 | 64)}
+            value={baseVoices}
+            disabled={allowInfiniteVoices}
+            onChange={(e) => handleBaseVoicesChange(Number(e.target.value) as 16 | 32 | 64)}
           >
             <option value={16}>16</option>
             <option value={32}>32</option>
             <option value={64}>64</option>
-            <option value={0}>∞</option>
           </select>
+
+          <label className="ctrl-label">∞ voices</label>
+          <button
+            className={`ctrl-toggle ${allowInfiniteVoices ? "ctrl-toggle--on" : ""}`}
+            onClick={() => handleAllowInfiniteVoicesChange(!allowInfiniteVoices)}
+            title="When on, voices grow without limit. When off, base voice count is the cap."
+          >
+            {allowInfiniteVoices ? "on" : "off"}
+          </button>
 
           <label className="ctrl-label">retrigger</label>
           <button
@@ -457,19 +528,14 @@ export default function App() {
             {retrigger ? "on" : "off"}
           </button>
         </div>
-
-        <div className="cache-status">
-          {cacheDir ? (
-            <>
-              <span className="cache-icon">💾</span>
-              <span className="cache-path" title={cacheDir}>{cacheDir}</span>
-              <button className="cache-clear-btn" onClick={handleClearCacheDir} title="Change cache directory">✕</button>
-            </>
-          ) : (
-            <span className="cache-missing">No cache directory set</span>
-          )}
-        </div>
       </header>
+
+      <CacheDirBar
+        cacheDirOverride={cacheDirOverride}
+        effectiveCacheDir={effectiveCacheDir}
+        onSetCustomDir={handleSetCustomDir}
+        onRemoveCustomDir={handleRemoveCustomDir}
+      />
 
       <main className="app-main">
         <PadGrid activePads={activePads} padStates={padStates} onSampleDrop={handleSampleDrop} onDeletePad={handleDeletePad} />

@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-const GUI_WIDTH: u32 = 960;
-const GUI_HEIGHT: u32 = 640;
+const GUI_WIDTH: u32 = 1140;
+const GUI_HEIGHT: u32 = 780;
 const GUI_DEV_SERVER_PROBE_URL: &str = "http://localhost:5173/wth-dispatch";
 const GUI_PUBLISHED_URL: &str = "https://dispatch-web-gui.vercel.app";
 
