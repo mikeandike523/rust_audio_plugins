@@ -14,12 +14,12 @@ type PluginMessage =
       velSensDb?: number;
       padVolumes?: number[];
       padMonos?: boolean[];
-      padNormalizes?: boolean[];
+      padPreamps?: number[];
       padLimiters?: boolean[];
       padCustomNames?: (string | null)[];
       showOriginalName?: boolean;
     }
-  | { type: "SampleLoaded"; padIndex: number; name: string; normScale?: number }
+  | { type: "SampleLoaded"; padIndex: number; name: string }
   | { type: "SampleError"; padIndex: number; message: string }
   | { type: "PadName"; padIndex: number; name: string }
   | { type: "PadCleared"; padIndex: number };
@@ -36,13 +36,12 @@ const sendToPluginSafe = (payload: unknown) => {
 
 const PAD_COUNT = 16;
 const PAD_MIDI_BASE = 36;
-const DB_MIN = -30;
-const DB_MAX = 6;
+const VOL_MIN = -48;
+const VOL_MAX = 6;
+const PREAMP_MIN = -30;
+const PREAMP_MAX = 18;
 const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 
-const linearToDb = (lin: number) =>
-  lin <= 0 ? DB_MIN : Math.max(DB_MIN, 20 * Math.log10(lin));
-const dbToLinear = (db: number) => Math.pow(10, db / 20);
 const fmtDb = (db: number) =>
   Math.abs(db) < 0.05 ? "0.0" : `${db > 0 ? "+" : ""}${db.toFixed(1)}`;
 
@@ -257,7 +256,7 @@ function PadGrid({
             onDrop={(e) => { e.preventDefault(); setDragOverPad(null); const file = e.dataTransfer.files[0]; if (file) onSampleDrop(i, file); }}
           >
             <div className="pad-top">
-              <span className="pad-note">{noteName}</span>
+              <span className="pad-note"><span className="pad-num">{i + 1}</span> {noteName}</span>
               <div className="pad-name-area">
                 {renamingPad === i ? (
                   <InlineRename
@@ -272,10 +271,10 @@ function PadGrid({
                   <>
                     <span
                       className="pad-name"
-                      onDoubleClick={(e) => { e.stopPropagation(); if (pad && !pad.loading) setRenamingPad(i); }}
-                      title={pad && !pad.loading ? "Double-click to rename" : undefined}
+                      onDoubleClick={(e) => { e.stopPropagation(); if (!pad?.loading) setRenamingPad(i); }}
+                      title={!pad?.loading ? "Double-click to rename" : undefined}
                     >
-                      {displayName ? displayName : <span className="pad-name--empty">{i + 1}</span>}
+                      {displayName ? displayName : <span className="pad-name--empty">—</span>}
                     </span>
                     {showSub && fileName && (
                       <span className="pad-filename">{fileName}</span>
@@ -303,28 +302,26 @@ function MixerView({
   padStates,
   padVolumes,
   padMonos,
-  padNormalizes,
+  padPreamps,
   padLimiters,
-  padNormScales,
   padCustomNames,
   showOriginalName,
   onVolumeChange,
   onMonoChange,
-  onNormalizeChange,
+  onPreampChange,
   onLimiterChange,
   onRename,
 }: {
   padStates: PadState[];
   padVolumes: number[];
   padMonos: boolean[];
-  padNormalizes: boolean[];
+  padPreamps: number[];
   padLimiters: boolean[];
-  padNormScales: (number | null)[];
   padCustomNames: (string | null)[];
   showOriginalName: boolean;
-  onVolumeChange: (padIndex: number, volume: number) => void;
+  onVolumeChange: (padIndex: number, volumeDb: number) => void;
   onMonoChange: (padIndex: number, mono: boolean) => void;
-  onNormalizeChange: (padIndex: number, normalize: boolean) => void;
+  onPreampChange: (padIndex: number, preampDb: number) => void;
   onLimiterChange: (padIndex: number, limit: boolean) => void;
   onRename: (padIndex: number, name: string | null) => void;
 }) {
@@ -335,19 +332,18 @@ function MixerView({
       {Array.from({ length: PAD_COUNT }, (_, i) => {
         const noteName = padNoteName(i);
         const pad = padStates[i];
-        const db = linearToDb(padVolumes[i]);
+        const volDb = padVolumes[i];
+        const preampDb = padPreamps[i];
         const customName = padCustomNames[i];
         const fileName = pad?.name ?? null;
         const displayName = customName ?? fileName;
         const showSub = showOriginalName && customName != null && customName !== fileName;
-        const normScale = padNormScales[i];
-        const normDb = normScale != null ? 20 * Math.log10(normScale) : null;
 
         return (
           <div key={i} className="mixer-strip">
             {/* Label */}
             <div className="mixer-pad-label">
-              <span className="mixer-note">{noteName}</span>
+              <span className="mixer-note"><span className="mixer-num">{i + 1}</span> {noteName}</span>
               {renamingPad === i ? (
                 <InlineRename
                   current={customName ?? fileName ?? ""}
@@ -370,43 +366,49 @@ function MixerView({
               )}
             </div>
 
-            {/* Fader */}
-            <div className="mixer-fader-area">
-              <span className="mixer-db-mark mixer-db-mark--top">+{DB_MAX}</span>
-              <input
-                type="range"
-                className="mixer-fader"
-                min={DB_MIN}
-                max={DB_MAX}
-                step={0.1}
-                value={db}
-                onChange={(e) => onVolumeChange(i, dbToLinear(Number(e.target.value)))}
-                onDoubleClick={() => onVolumeChange(i, 1.0)}
-                title="Double-click to reset to 0 dB"
-              />
-              <span className="mixer-db-mark mixer-db-mark--bot">{DB_MIN}</span>
-            </div>
-
-            {/* dB readout + norm gain */}
-            <div className="mixer-db-val">{fmtDb(db)}</div>
-            {padNormalizes[i] && normDb != null && (
-              <div className="mixer-norm-gain" title="Pre-gain from RMS normalization">
-                N {normDb >= 0 ? "+" : ""}{normDb.toFixed(1)}
+            {/* Two faders: Pre-amp and Volume */}
+            <div className="mixer-faders-row">
+              {/* Pre-amp fader */}
+              <div className="mixer-fader-col">
+                <span className="mixer-fader-lbl">PRE</span>
+                <span className="mixer-db-mark mixer-db-mark--top">+{PREAMP_MAX}</span>
+                <input
+                  type="range"
+                  className="mixer-fader"
+                  min={PREAMP_MIN}
+                  max={PREAMP_MAX}
+                  step={0.5}
+                  value={preampDb}
+                  onChange={(e) => onPreampChange(i, Number(e.target.value))}
+                  onDoubleClick={() => onPreampChange(i, 0)}
+                  title="Pre-amp (−30 to +18 dB). Double-click to reset."
+                />
+                <span className="mixer-db-mark mixer-db-mark--bot">{PREAMP_MIN}</span>
+                <div className="mixer-db-val">{fmtDb(preampDb)}</div>
               </div>
-            )}
-            {(!padNormalizes[i] || normDb == null) && (
-              <div className="mixer-norm-gain mixer-norm-gain--hidden">—</div>
-            )}
+
+              {/* Volume fader */}
+              <div className="mixer-fader-col">
+                <span className="mixer-fader-lbl">VOL</span>
+                <span className="mixer-db-mark mixer-db-mark--top">+{VOL_MAX}</span>
+                <input
+                  type="range"
+                  className="mixer-fader"
+                  min={VOL_MIN}
+                  max={VOL_MAX}
+                  step={0.1}
+                  value={volDb}
+                  onChange={(e) => onVolumeChange(i, Number(e.target.value))}
+                  onDoubleClick={() => onVolumeChange(i, 0)}
+                  title="Volume (−48 to +6 dB). Double-click to reset."
+                />
+                <span className="mixer-db-mark mixer-db-mark--bot">{VOL_MIN}</span>
+                <div className="mixer-db-val">{fmtDb(volDb)}</div>
+              </div>
+            </div>
 
             {/* Toggles */}
             <div className="mixer-toggles">
-              <button
-                className={`mixer-toggle${padNormalizes[i] ? " mixer-toggle--on" : ""}`}
-                onClick={() => onNormalizeChange(i, !padNormalizes[i])}
-                title="RMS normalize (scales to match full-scale 50% square wave RMS)"
-              >
-                N
-              </button>
               <button
                 className={`mixer-toggle${padMonos[i] ? " mixer-toggle--on" : ""}`}
                 onClick={() => onMonoChange(i, !padMonos[i])}
@@ -417,7 +419,7 @@ function MixerView({
               <button
                 className={`mixer-toggle mixer-toggle--lim${padLimiters[i] ? " mixer-toggle--on" : ""}`}
                 onClick={() => onLimiterChange(i, !padLimiters[i])}
-                title="Hard clip per-voice to ±1.0 (after all gain)"
+                title="Soft saturation (tanh curve)"
               >
                 <LimiterIcon />
               </button>
@@ -429,14 +431,14 @@ function MixerView({
   );
 }
 
-/** Small brick-wall / ceiling SVG icon for the limiter toggle. */
+/** Small brick-wall / ceiling SVG icon for the saturation toggle. */
 function LimiterIcon() {
   return (
     <svg viewBox="0 0 10 9" width="10" height="9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
       {/* ceiling bar */}
       <line x1="1" y1="2" x2="9" y2="2" />
-      {/* clipped wave: up–flat–down */}
-      <polyline points="1,8 3,2 7,2 9,8" fill="none" />
+      {/* soft clipped wave: up–curve–down */}
+      <path d="M1,8 Q3,2 5,2 Q7,2 9,8" fill="none" />
     </svg>
   );
 }
@@ -492,11 +494,10 @@ export default function App() {
   const [respectNoteOffs, setRespectNoteOffs] = useState(true);
   const [masterGain, setMasterGain] = useState(0);
   const [velSensDb, setVelSensDb] = useState(-60);
-  const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(1.0));
+  const [padVolumes, setPadVolumes] = useState<number[]>(() => Array(PAD_COUNT).fill(0));
   const [padMonos, setPadMonos] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
-  const [padNormalizes, setPadNormalizes] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
+  const [padPreamps, setPadPreamps] = useState<number[]>(() => Array(PAD_COUNT).fill(0));
   const [padLimiters, setPadLimiters] = useState<boolean[]>(() => Array(PAD_COUNT).fill(false));
-  const [padNormScales, setPadNormScales] = useState<(number | null)[]>(() => Array(PAD_COUNT).fill(null));
   const [padCustomNames, setPadCustomNames] = useState<(string | null)[]>(() => Array(PAD_COUNT).fill(null));
   const [showOriginalName, setShowOriginalName] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -522,7 +523,7 @@ export default function App() {
         if (msg.velSensDb != null) setVelSensDb(msg.velSensDb);
         if (msg.padVolumes != null) setPadVolumes(msg.padVolumes);
         if (msg.padMonos != null) setPadMonos(msg.padMonos);
-        if (msg.padNormalizes != null) setPadNormalizes(msg.padNormalizes);
+        if (msg.padPreamps != null) setPadPreamps(msg.padPreamps);
         if (msg.padLimiters != null) setPadLimiters(msg.padLimiters);
         if (msg.padCustomNames != null) setPadCustomNames(msg.padCustomNames);
         if (msg.showOriginalName != null) setShowOriginalName(msg.showOriginalName);
@@ -533,13 +534,6 @@ export default function App() {
           next[msg.padIndex] = { name: msg.name, loading: false };
           return next;
         });
-        if (msg.normScale != null) {
-          setPadNormScales((prev) => {
-            const next = [...prev];
-            next[msg.padIndex] = msg.normScale!;
-            return next;
-          });
-        }
       } else if (msg.type === "PadName") {
         setPadStates((prev) => {
           const next = [...prev];
@@ -553,7 +547,6 @@ export default function App() {
         setPadStates((prev) => { const next = [...prev]; next[msg.padIndex] = null; return next; });
       } else if (msg.type === "PadCleared") {
         setPadStates((prev) => { const next = [...prev]; next[msg.padIndex] = null; return next; });
-        setPadNormScales((prev) => { const next = [...prev]; next[msg.padIndex] = null; return next; });
       }
     };
 
@@ -608,19 +601,19 @@ export default function App() {
     sendToPluginSafe({ type: "DeletePad", padIndex });
   };
 
-  const handlePadNormalizeChange = (padIndex: number, normalize: boolean) => {
-    setPadNormalizes((prev) => { const next = [...prev]; next[padIndex] = normalize; return next; });
-    sendToPluginSafe({ type: "SetPadNormalize", padIndex, normalize });
-  };
-
   const handlePadMonoChange = (padIndex: number, mono: boolean) => {
     setPadMonos((prev) => { const next = [...prev]; next[padIndex] = mono; return next; });
     sendToPluginSafe({ type: "SetPadMono", padIndex, mono });
   };
 
-  const handlePadVolumeChange = (padIndex: number, volume: number) => {
-    setPadVolumes((prev) => { const next = [...prev]; next[padIndex] = volume; return next; });
-    sendToPluginSafe({ type: "SetPadVolume", padIndex, volume });
+  const handlePadVolumeChange = (padIndex: number, volumeDb: number) => {
+    setPadVolumes((prev) => { const next = [...prev]; next[padIndex] = volumeDb; return next; });
+    sendToPluginSafe({ type: "SetPadVolume", padIndex, volume: volumeDb });
+  };
+
+  const handlePadPreampChange = (padIndex: number, preampDb: number) => {
+    setPadPreamps((prev) => { const next = [...prev]; next[padIndex] = preampDb; return next; });
+    sendToPluginSafe({ type: "SetPadPreamp", padIndex, preampDb });
   };
 
   const handlePadLimiterChange = (padIndex: number, limit: boolean) => {
@@ -720,14 +713,13 @@ export default function App() {
             padStates={padStates}
             padVolumes={padVolumes}
             padMonos={padMonos}
-            padNormalizes={padNormalizes}
+            padPreamps={padPreamps}
             padLimiters={padLimiters}
-            padNormScales={padNormScales}
             padCustomNames={padCustomNames}
             showOriginalName={showOriginalName}
             onVolumeChange={handlePadVolumeChange}
             onMonoChange={handlePadMonoChange}
-            onNormalizeChange={handlePadNormalizeChange}
+            onPreampChange={handlePadPreampChange}
             onLimiterChange={handlePadLimiterChange}
             onRename={handlePadRename}
           />

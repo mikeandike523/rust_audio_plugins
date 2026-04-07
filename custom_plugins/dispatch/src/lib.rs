@@ -72,23 +72,6 @@ struct PadData {
     channels: usize,
     frames: usize,
     data: Vec<f32>,
-    /// Precomputed RMS normalize scale: scales audio so its RMS equals 1.0
-    /// (same RMS as a full-scale 50% duty-cycle square wave). Always > 0.
-    norm_scale: f32,
-}
-
-/// Compute the RMS normalize scale factor.
-/// Scales the sample so its RMS equals 1.0 (a full-scale 50% duty-cycle square wave's RMS).
-fn compute_rms_scale(data: &[f32]) -> f32 {
-    if data.is_empty() {
-        return 1.0;
-    }
-    let mean_sq = data.iter().copied().map(|s| s * s).sum::<f32>() / data.len() as f32;
-    let rms = mean_sq.sqrt();
-    // 1.0 is the RMS of a full-scale 50% duty-cycle square wave (peak = 1.0).
-    // Slightly hotter than sine (1/√2 ≈ 0.707) so normalised samples sit louder.
-    const TARGET_RMS: f32 = 1.0;
-    if rms > 0.0 { TARGET_RMS / rms } else { 1.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +103,7 @@ impl Voice {
 // ---------------------------------------------------------------------------
 
 enum UiEvent {
-    SampleLoaded { pad_index: usize, name: String, norm_scale: f32 },
+    SampleLoaded { pad_index: usize, name: String },
     SampleError { pad_index: usize, message: String },
     PadCleared { pad_index: usize },
 }
@@ -152,14 +135,13 @@ struct DispatchParams {
     #[persist = "pad_uuids"]
     pub pad_uuids: Arc<Mutex<[Option<String>; PAD_COUNT]>>,
 
-    /// Per-pad normalize toggle (not a DAW automation param — persisted as
-    /// instance state rather than a float/bool param so it doesn't clutter
-    /// the DAW's automation lane list).
-    #[persist = "pad_normalizes"]
-    pub pad_normalizes: Arc<Mutex<[bool; PAD_COUNT]>>,
+    /// Per-pad pre-amp gain in dB (−30 to +18). Applied before the automatable
+    /// volume. Persisted but not automatable so it doesn't clutter the DAW lane list.
+    #[persist = "pad_preamps"]
+    pub pad_preamps: Arc<Mutex<[f32; PAD_COUNT]>>,
 
-    /// Per-pad hard-limiter toggle. When on, per-voice output is clamped to
-    /// [−1, +1] after all gain (normalize × volume × velocity).
+    /// Per-pad soft-saturation toggle. When on, per-voice output is passed
+    /// through a tanh soft-clipper after all gain.
     #[persist = "pad_limiters"]
     pub pad_limiters: Arc<Mutex<[bool; PAD_COUNT]>>,
 
@@ -191,7 +173,7 @@ impl Default for DispatchParams {
         Self {
             cache_dir: Arc::new(Mutex::new(None)),
             pad_uuids: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
-            pad_normalizes: Arc::new(Mutex::new([false; PAD_COUNT])),
+            pad_preamps: Arc::new(Mutex::new([0.0f32; PAD_COUNT])),
             pad_limiters: Arc::new(Mutex::new([false; PAD_COUNT])),
             pad_custom_names: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
             show_original_name: Arc::new(Mutex::new(true)),
@@ -210,9 +192,10 @@ impl Default for DispatchParams {
             pads: std::array::from_fn(|i| PadChannelParams {
                 volume: FloatParam::new(
                     format!("Pad {} Volume", i + 1),
-                    1.0,
-                    FloatRange::Linear { min: 0.0, max: 2.0 },
-                ),
+                    0.0,
+                    FloatRange::Linear { min: -48.0, max: 6.0 },
+                )
+                .with_unit(" dB"),
                 mono: BoolParam::new(format!("Pad {} Mono", i + 1), false),
             }),
         }
@@ -264,10 +247,11 @@ enum Action {
         pad_index: usize,
         mono: bool,
     },
-    SetPadNormalize {
+    SetPadPreamp {
         #[serde(rename = "padIndex")]
         pad_index: usize,
-        normalize: bool,
+        #[serde(rename = "preampDb")]
+        preamp_db: f32,
     },
     SetPadLimiter {
         #[serde(rename = "padIndex")]
@@ -413,12 +397,10 @@ fn load_resampled(cache_dir: &std::path::Path, uuid: &str, project_rate: u32) ->
     for chunk in array_bytes.chunks_exact(4) {
         data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
-    let norm_scale = compute_rms_scale(&data);
     Some(PadData {
         name: meta.name,
         channels: meta.channels as usize,
         frames: meta.frames as usize,
-        norm_scale,
         data,
     })
 }
@@ -526,12 +508,10 @@ fn spawn_pad_resample(
             )
             .map_err(|e| format!("write resampled.json: {e}"))?;
 
-            let norm_scale = compute_rms_scale(&resampled);
             Ok(PadData {
                 name: meta.name,
                 channels: meta.channels as usize,
                 frames: out_frames,
-                norm_scale,
                 data: resampled,
             })
         })();
@@ -541,9 +521,8 @@ fn spawn_pad_resample(
         let event = match result {
             Ok(data) => {
                 let name = data.name.clone();
-                let norm_scale = data.norm_scale;
                 *pad_data[pad_index].lock().unwrap() = Some(data);
-                UiEvent::SampleLoaded { pad_index, name, norm_scale }
+                UiEvent::SampleLoaded { pad_index, name }
             }
             Err(message) => UiEvent::SampleError { pad_index, message },
         };
@@ -801,8 +780,8 @@ impl Plugin for Dispatch {
             })
         });
 
-        // Lock pad_normalizes and pad_limiters once per buffer, not per sample.
-        let pad_normalizes = self.params.pad_normalizes.lock().unwrap().clone();
+        // Lock pad_preamps and pad_limiters once per buffer, not per sample.
+        let pad_preamps = self.params.pad_preamps.lock().unwrap().clone();
         let pad_limiters = self.params.pad_limiters.lock().unwrap().clone();
         // Precompute velocity floor once per buffer.
         let vel_floor = 10f32.powf(self.params.vel_sens_db.value() / 20.0);
@@ -870,14 +849,11 @@ impl Plugin for Dispatch {
                         Some(ref data) => {
                             if v.sample_pos < data.frames {
                                 let fi = v.sample_pos * data.channels;
-                                let vol = self.params.pads[v.pad_index].volume.value();
-                                let norm_scale = if pad_normalizes[v.pad_index] {
-                                    data.norm_scale
-                                } else {
-                                    1.0
-                                };
+                                let vol_db = self.params.pads[v.pad_index].volume.value();
+                                let preamp_db = pad_preamps[v.pad_index];
+                                let vol = 10f32.powf((vol_db + preamp_db) / 20.0);
                                 let vel_gain = vel_floor + (1.0 - vel_floor) * v.velocity_gain;
-                                let gain = vel_gain * vol * norm_scale;
+                                let gain = vel_gain * vol;
                                 let l_raw = data.data[fi] * gain;
                                 let r_raw = if data.channels > 1 {
                                     data.data[fi + 1] * gain
@@ -890,8 +866,10 @@ impl Plugin for Dispatch {
                                 } else {
                                     (l_raw, r_raw)
                                 };
+                                // Tanh soft saturation: smooth S-curve, transparent at low
+                                // levels, gradually limits toward ±1 for hot signals.
                                 let (l, r) = if pad_limiters[v.pad_index] {
-                                    (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+                                    (l.tanh(), r.tanh())
                                 } else {
                                     (l, r)
                                 };
@@ -967,8 +945,8 @@ impl Plugin for Dispatch {
                             let effective_dir =
                                 effective_cache_dir(&cache_dir_override);
                             let pad_uuids = params.pad_uuids.lock().unwrap().clone();
-                            let pad_normalizes =
-                                params.pad_normalizes.lock().unwrap().clone();
+                            let pad_preamps: Vec<f32> =
+                                params.pad_preamps.lock().unwrap().to_vec();
                             let pad_limiters =
                                 params.pad_limiters.lock().unwrap().clone();
                             let pad_custom_names: Vec<Option<String>> =
@@ -995,7 +973,7 @@ impl Plugin for Dispatch {
                                 "velSensDb": params.vel_sens_db.value(),
                                 "padVolumes": pad_vols,
                                 "padMonos": pad_monos,
-                                "padNormalizes": pad_normalizes,
+                                "padPreamps": pad_preamps,
                                 "padLimiters": pad_limiters,
                                 "padCustomNames": pad_custom_names,
                                 "showOriginalName": show_original_name,
@@ -1020,13 +998,11 @@ impl Plugin for Dispatch {
                                     continue;
                                 }
                                 if let Some(data) = load_resampled(&effective_dir, uuid, pr) {
-                                    let norm_scale = data.norm_scale;
                                     *pad_data[pad_idx].lock().unwrap() = Some(data);
                                     ctx.send_json(json!({
                                         "type": "SampleLoaded",
                                         "padIndex": pad_idx,
                                         "name": meta.name,
-                                        "normScale": norm_scale,
                                     }));
                                 } else {
                                     resample_in_progress[pad_idx]
@@ -1145,9 +1121,7 @@ impl Plugin for Dispatch {
 
                             let pr = project_sample_rate.load(Ordering::Relaxed);
                             if pr > 0 && sample_rate == pr {
-                                let ns = compute_rms_scale(&raw);
                                 *pad_data[pad_index].lock().unwrap() = Some(PadData {
-                                    norm_scale: ns,
                                     name: name.clone(),
                                     channels: channels as usize,
                                     frames: frames as usize,
@@ -1157,7 +1131,6 @@ impl Plugin for Dispatch {
                                     "type": "SampleLoaded",
                                     "padIndex": pad_index,
                                     "name": name,
-                                    "normScale": ns,
                                 }));
                             } else if pr > 0
                                 && !resample_in_progress[pad_index]
@@ -1211,7 +1184,7 @@ impl Plugin for Dispatch {
 
                         Action::SetPadVolume { pad_index, volume } => {
                             if pad_index < PAD_COUNT {
-                                let clamped = volume.clamp(0.0, 2.0);
+                                let clamped = volume.clamp(-48.0, 6.0);
                                 setter.begin_set_parameter(
                                     &params.pads[pad_index].volume,
                                 );
@@ -1240,10 +1213,10 @@ impl Plugin for Dispatch {
                             }
                         }
 
-                        Action::SetPadNormalize { pad_index, normalize } => {
+                        Action::SetPadPreamp { pad_index, preamp_db } => {
                             if pad_index < PAD_COUNT {
-                                params.pad_normalizes.lock().unwrap()[pad_index] =
-                                    normalize;
+                                params.pad_preamps.lock().unwrap()[pad_index] =
+                                    preamp_db.clamp(-30.0, 18.0);
                             }
                         }
 
@@ -1293,12 +1266,12 @@ impl Plugin for Dispatch {
 
                                 // Reset all per-pad params to defaults.
                                 setter.begin_set_parameter(&params.pads[pad_index].volume);
-                                setter.set_parameter(&params.pads[pad_index].volume, 1.0);
+                                setter.set_parameter(&params.pads[pad_index].volume, 0.0);
                                 setter.end_set_parameter(&params.pads[pad_index].volume);
                                 setter.begin_set_parameter(&params.pads[pad_index].mono);
                                 setter.set_parameter(&params.pads[pad_index].mono, false);
                                 setter.end_set_parameter(&params.pads[pad_index].mono);
-                                params.pad_normalizes.lock().unwrap()[pad_index] = false;
+                                params.pad_preamps.lock().unwrap()[pad_index] = 0.0;
                                 params.pad_limiters.lock().unwrap()[pad_index] = false;
                                 params.pad_custom_names.lock().unwrap()[pad_index] = None;
 
@@ -1325,8 +1298,8 @@ impl Plugin for Dispatch {
                                 let pad_monos: Vec<bool> = (0..PAD_COUNT)
                                     .map(|i| params.pads[i].mono.value())
                                     .collect();
-                                let pad_normalizes =
-                                    params.pad_normalizes.lock().unwrap().clone();
+                                let pad_preamps: Vec<f32> =
+                                    params.pad_preamps.lock().unwrap().to_vec();
                                 let pad_limiters =
                                     params.pad_limiters.lock().unwrap().clone();
                                 let pad_custom_names: Vec<Option<String>> =
@@ -1336,7 +1309,7 @@ impl Plugin for Dispatch {
                                     "type": "State",
                                     "padVolumes": pad_vols,
                                     "padMonos": pad_monos,
-                                    "padNormalizes": pad_normalizes,
+                                    "padPreamps": pad_preamps,
                                     "padLimiters": pad_limiters,
                                     "padCustomNames": pad_custom_names,
                                 }));
@@ -1398,12 +1371,11 @@ impl Plugin for Dispatch {
                         ui_events.lock().unwrap().drain(..).collect();
                     for event in events {
                         match event {
-                            UiEvent::SampleLoaded { pad_index, name, norm_scale } => {
+                            UiEvent::SampleLoaded { pad_index, name } => {
                                 ctx.send_json(json!({
                                     "type": "SampleLoaded",
                                     "padIndex": pad_index,
                                     "name": name,
-                                    "normScale": norm_scale,
                                 }));
                             }
                             UiEvent::SampleError { pad_index, message } => {
