@@ -8,7 +8,7 @@ import {
 
 import { sendToPluginSafe } from "./useInitializedParam";
 import { base64ToFloat32Array, clamp } from "../utils/audio";
-import type { ResampleModalState, SampleInfo } from "../types/appTypes";
+import type { SampleInfo } from "../types/appTypes";
 import type { PluginMessage } from "../types/appTypes";
 
 type InitializedParam<T> = {
@@ -33,10 +33,10 @@ type UsePluginMessagesOptions = {
   setCacheDirError: Dispatch<SetStateAction<string | null>>;
   setSampleError: Dispatch<SetStateAction<string | null>>;
   setSampleInfo: Dispatch<SetStateAction<SampleInfo | null>>;
-  setResampleModal: Dispatch<SetStateAction<ResampleModalState | null>>;
-  setResampleFading: Dispatch<SetStateAction<boolean>>;
+  addTask: (id: string, message: string) => void;
+  updateTask: (id: string, message: string) => void;
+  removeTask: (id: string) => void;
   setPitchHz: Dispatch<SetStateAction<number | null>>;
-  setPitchLoading: Dispatch<SetStateAction<boolean>>;
   onSampleSaved: () => void;
   onCachedSampleLoaded: () => void;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
@@ -44,7 +44,8 @@ type UsePluginMessagesOptions = {
 };
 
 export const usePluginMessages = (options: UsePluginMessagesOptions) => {
-  const resampleTimeoutRef = useRef<number | null>(null);
+  // Holds the label text from ResampleStarted so we can prefix progress updates.
+  const resampleLabelRef = useRef<string>("Resampling…");
 
   // "Latest ref" pattern: always holds the most recent options so the effect
   // can register the handler exactly once (on mount) without stale closures.
@@ -69,10 +70,10 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         setCacheDirError,
         setSampleError,
         setSampleInfo,
-        setResampleModal,
-        setResampleFading,
+        addTask,
+        updateTask,
+        removeTask,
         setPitchHz,
-        setPitchLoading,
         onSampleSaved,
         onCachedSampleLoaded,
         audioBufferRef,
@@ -207,80 +208,42 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       }
 
       if (message.type === "ResampleStarted") {
-        if (resampleTimeoutRef.current) {
-          window.clearTimeout(resampleTimeoutRef.current);
-          resampleTimeoutRef.current = null;
-        }
-        setResampleFading(false);
-        setResampleModal({
-          label: message.label,
-          progress: message.progress ?? 0,
-          status: "working",
-        });
+        resampleLabelRef.current = message.label;
+        addTask("resample", message.label);
       }
 
       if (message.type === "ResampleProgress") {
-        setResampleModal((prev) => {
-          if (!prev) {
-            return {
-              label: "Resampling...",
-              progress: message.progress,
-              status: "working",
-            };
-          }
-          return {
-            ...prev,
-            progress: message.progress,
-            status: "working",
-          };
-        });
+        const pct = Math.round(message.progress * 100);
+        updateTask("resample", `${resampleLabelRef.current} · ${pct}%`);
       }
 
       if (message.type === "ResampleComplete") {
-        setResampleModal((prev) => ({
-          label: prev?.label ?? "Resample complete",
-          progress: 1,
-          status: "done",
-          message: message.message ?? undefined,
-        }));
-        setResampleFading(true);
-        resampleTimeoutRef.current = window.setTimeout(() => {
-          setResampleModal(null);
-          setResampleFading(false);
-          resampleTimeoutRef.current = null;
-        }, 800);
+        removeTask("resample");
+        setStatus(message.message ?? "Resample complete");
       }
 
       if (message.type === "ResampleError") {
-        setResampleModal({
-          label: "Resample failed",
-          progress: 1,
-          status: "error",
-          message: message.message,
-        });
-        setResampleFading(false);
-        resampleTimeoutRef.current = window.setTimeout(() => {
-          setResampleModal(null);
-          resampleTimeoutRef.current = null;
-        }, 1600);
+        removeTask("resample");
+        setStatus(`Resample failed: ${message.message}`);
       }
 
       if (message.type === "PitchEstimating") {
-        setPitchLoading(true);
+        addTask("pitch", "Estimating pitch…");
       }
 
       if (message.type === "PitchDetected") {
         setPitchHz(message.hz);
-        setPitchLoading(false);
+        removeTask("pitch");
       }
 
       if (message.type === "PitchNoResult") {
         setPitchHz(null);
-        setPitchLoading(false);
+        removeTask("pitch");
       }
 
       if (message.type === "PitchEstimateError") {
-        setPitchLoading(false);
+        setStatus(`Pitch estimate failed: ${message.message}`);
+        removeTask("pitch");
       }
     };
 
@@ -289,10 +252,6 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
     return () => {
       if (window.onPluginMessage) {
         window.onPluginMessage = undefined;
-      }
-      if (resampleTimeoutRef.current) {
-        window.clearTimeout(resampleTimeoutRef.current);
-        resampleTimeoutRef.current = null;
       }
     };
   // Empty deps: register handler exactly once on mount. All runtime values are

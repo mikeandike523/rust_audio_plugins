@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { sendToPluginSafe, useInitializedParam } from "./hooks/useInitializedParam";
+import { useLoadingTasks } from "./hooks/useLoadingTasks";
 import { usePluginMessages } from "./hooks/usePluginMessages";
 import { useSampleLoader } from "./hooks/useSampleLoader";
 import { useWaveformCanvas } from "./hooks/useWaveformCanvas";
 import { clamp } from "./utils/audio";
 import { hzToNoteInfo, formatPitchReadout } from "./utils/pitch";
-import type { ResampleModalState, SampleInfo } from "./types/appTypes";
+import type { SampleInfo } from "./types/appTypes";
 import { Controls } from "./components/Controls";
 import { Footer } from "./components/Footer";
-import { ResampleModal } from "./components/ResampleModal";
+import { LoadingOverlay } from "./components/LoadingOverlay";
 import { SampleDrop } from "./components/SampleDrop";
 
 export default function App() {
@@ -19,10 +20,7 @@ export default function App() {
   const [cacheDirError, setCacheDirError] = useState<string | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [sampleInfo, setSampleInfo] = useState<SampleInfo | null>(null);
-  const [resampleModal, setResampleModal] = useState<ResampleModalState | null>(null);
-  const [resampleFading, setResampleFading] = useState(false);
   const [pitchHz, setPitchHz] = useState<number | null>(null);
-  const [pitchLoading, setPitchLoading] = useState(false);
   // true when nudge checkbox changed (or start pos changed) since the last estimate
   const [pitchStale, setPitchStale] = useState(false);
   const [nudgeTo12edo, setNudgeTo12edo] = useState(false);
@@ -34,6 +32,10 @@ export default function App() {
   const audioBufferRef = useRef<AudioBuffer | null>(null);
   const waveformContainerRef = useRef<HTMLDivElement | null>(null);
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const { tasks, addTask, updateTask, removeTask } = useLoadingTasks();
+  // Derived: the overlay blocks input whenever any task is active.
+  const pitchLoading = tasks.some((t) => t.id === "pitch");
 
   const pluginVersionParam = useInitializedParam<string>({
     name: "pluginVersion",
@@ -130,30 +132,28 @@ export default function App() {
 
   const handleRecalcPitch = useCallback(() => {
     setPitchStale(false);
+    addTask("pitch", "Estimating pitch…");
     sendToPluginSafe({
       type: "RequestPitchEstimate",
       sample_start: sampleStartParam.value ?? 0,
     });
-    setPitchLoading(true);
-  }, [sampleStartParam.value]);
+  }, [addTask, sampleStartParam.value]);
 
   const onSampleSaved = useCallback(() => {
-    // Auto-estimate pitch from position 0 on each new sample save.
-    // Start handle resets to 0 via the sampleInfo effect below.
+    addTask("pitch", "Estimating pitch…");
     sendToPluginSafe({ type: "RequestPitchEstimate", sample_start: 0 });
-    setPitchLoading(true);
     setPitchHz(null);
     setPitchStale(false);
-  }, []);
+  }, [addTask]);
 
   const onCachedSampleLoaded = useCallback(() => {
+    addTask("pitch", "Estimating pitch…");
     sendToPluginSafe({
       type: "RequestPitchEstimate",
       sample_start: sampleStartParam.value ?? 0,
     });
-    setPitchLoading(true);
     setPitchStale(false);
-  }, [sampleStartParam.value]);
+  }, [addTask, sampleStartParam.value]);
 
   usePluginMessages({
     pluginVersionParam,
@@ -170,10 +170,10 @@ export default function App() {
     setCacheDirError,
     setSampleError,
     setSampleInfo,
-    setResampleModal,
-    setResampleFading,
+    addTask,
+    updateTask,
+    removeTask,
     setPitchHz,
-    setPitchLoading,
     onSampleSaved,
     onCachedSampleLoaded,
     audioBufferRef,
@@ -216,6 +216,15 @@ export default function App() {
     onSampleError: setSampleError,
     onStatus: setStatus,
   });
+
+  // Sync decode state into the unified task system.
+  useEffect(() => {
+    if (isDecoding) {
+      addTask("decode", "Decoding audio…");
+    } else {
+      removeTask("decode");
+    }
+  }, [isDecoding, addTask, removeTask]);
 
   const handlePickCacheDir = () => {
     setCacheDirError(null);
@@ -384,7 +393,7 @@ export default function App() {
         loadedFrom={loadedFrom}
       />
 
-      <ResampleModal resampleModal={resampleModal} resampleFading={resampleFading} />
+      <LoadingOverlay tasks={tasks} />
     </div>
   );
 }

@@ -463,59 +463,54 @@ body {
 /* ── Hidden inputs ── */
 .hidden-file-input { display: none; }
 
-/* ── Resample progress modal ── */
-.progress-backdrop {
+/* ── Unified loading overlay ── */
+.loading-backdrop {
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(24, 18, 12, 0.35);
-  z-index: 25;
-  opacity: 1;
-  transition: opacity 0.6s ease;
+  background: rgba(24, 18, 12, 0.45);
+  z-index: 50;
 }
 
-.progress-backdrop.is-fading {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.progress-modal {
-  width: min(360px, 90vw);
+.loading-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
   background: #fffaf4;
   border-radius: 16px;
-  padding: 18px;
+  padding: 22px 28px;
   border: 1px solid #e3d7cb;
   box-shadow: 0 16px 30px rgba(24, 18, 12, 0.35);
-  display: grid;
-  gap: 10px;
+  min-width: 180px;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid #f0e3d6;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   text-align: center;
 }
 
-.progress-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: #2f2a24;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 8px;
-  border-radius: 999px;
-  background: #f2e5d7;
-  overflow: hidden;
-  border: 1px solid #e2d3c5;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #e07a3f, #f0a06b);
-  transition: width 0.2s ease;
-}
-
-.progress-copy {
-  font-size: 11px;
+.loading-task-message {
+  font-size: 12px;
   font-weight: 600;
-  color: #6a3c21;
+  color: #2f2a24;
+  font-variant-numeric: tabular-nums;
 }

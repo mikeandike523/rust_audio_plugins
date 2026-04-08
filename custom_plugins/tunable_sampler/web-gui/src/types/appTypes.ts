@@ -69,9 +69,3 @@ export type SampleInfo = {
   duration: number;
 };
 
-export type ResampleModalState = {
-  label: string;
-  progress: number;
-  status: "working" | "done" | "error";
-  message?: string;
-};
