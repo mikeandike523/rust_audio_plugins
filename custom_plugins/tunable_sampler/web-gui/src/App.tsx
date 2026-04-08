@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { sendToPluginSafe, useInitializedParam } from "./hooks/useInitializedParam";
-import { RESAMPLE_OPTIONS } from "./constants";
 import { usePluginMessages } from "./hooks/usePluginMessages";
 import { useSampleLoader } from "./hooks/useSampleLoader";
 import { useWaveformCanvas } from "./hooks/useWaveformCanvas";
@@ -67,11 +66,11 @@ export default function App() {
     [],
   );
   const resampleInputSendPayload = useCallback(
-    (value: number) => ({ type: "SetResamplePointsInput", points: value }),
+    (value: number) => ({ type: "SetResampleQualityInput", quality: value }),
     [],
   );
   const resamplePitchSendPayload = useCallback(
-    (value: number) => ({ type: "SetResamplePointsPitch", points: value }),
+    (value: number) => ({ type: "SetResampleQualityPitch", quality: value }),
     [],
   );
 
@@ -106,17 +105,17 @@ export default function App() {
     pollMs: null,
   });
 
-  const resamplePointsInputParam = useInitializedParam<number>({
-    name: "resamplePointsInput",
-    initialValue: RESAMPLE_OPTIONS[2],
+  const resampleQualityInputParam = useInitializedParam<number>({
+    name: "resampleQualityInput",
+    initialValue: 2,
     requestPayload: requestStatePayload,
     sendPayload: resampleInputSendPayload,
     pollMs: null,
   });
 
-  const resamplePointsPitchParam = useInitializedParam<number>({
-    name: "resamplePointsPitch",
-    initialValue: RESAMPLE_OPTIONS[2],
+  const resampleQualityPitchParam = useInitializedParam<number>({
+    name: "resampleQualityPitch",
+    initialValue: 0,
     requestPayload: requestStatePayload,
     sendPayload: resamplePitchSendPayload,
     pollMs: null,
@@ -163,8 +162,8 @@ export default function App() {
     detuneParam,
     sampleStartParam,
     sampleEndParam,
-    resamplePointsInputParam,
-    resamplePointsPitchParam,
+    resampleQualityInputParam,
+    resampleQualityPitchParam,
     setStatus,
     setEffectiveCacheDir,
     setCacheDirOverride,
@@ -193,8 +192,8 @@ export default function App() {
     detuneParam.ready &&
     sampleStartParam.ready &&
     sampleEndParam.ready &&
-    resamplePointsInputParam.ready &&
-    resamplePointsPitchParam.ready;
+    resampleQualityInputParam.ready &&
+    resampleQualityPitchParam.ready;
 
   useEffect(() => {
     if (allParamsReady) return;
@@ -227,6 +226,8 @@ export default function App() {
   const handleClearCacheDir = () => {
     sendToPluginSafe({ type: "ClearCacheDir" });
   };
+
+  const handleForceResample = () => sendToPluginSafe({ type: "ForceResample" });
 
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
 
@@ -370,10 +371,11 @@ export default function App() {
         detune={detuneParam.value}
         onDetuneChange={handleDetuneChange}
         onDetuneReset={handleDetuneReset}
-        resamplePointsInput={resamplePointsInputParam.value}
-        resamplePointsPitch={resamplePointsPitchParam.value}
-        onResamplePointsInputChange={(v) => { if (!Number.isNaN(v)) resamplePointsInputParam.setValue(v); }}
-        onResamplePointsPitchChange={(v) => { if (!Number.isNaN(v)) resamplePointsPitchParam.setValue(v); }}
+        resampleQualityInput={resampleQualityInputParam.value}
+        resampleQualityPitch={resampleQualityPitchParam.value}
+        onResampleQualityInputChange={(v) => resampleQualityInputParam.setValue(v)}
+        onResampleQualityPitchChange={(v) => resampleQualityPitchParam.setValue(v)}
+        onForceResample={handleForceResample}
       />
 
       <Footer

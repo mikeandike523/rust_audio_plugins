@@ -5,8 +5,8 @@ export type PluginMessage =
       effectiveCacheDir?: string | null;
       cacheDirOverride?: string | null;
       projectSampleRate?: number | null;
-      resamplePointsInput?: number | null;
-      resamplePointsPitch?: number | null;
+      resampleQualityInput?: number | null;
+      resampleQualityPitch?: number | null;
       sampleStart?: number | null;
       sampleEnd?: number | null;
       gain?: number | null;

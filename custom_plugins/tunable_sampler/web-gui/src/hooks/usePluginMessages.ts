@@ -25,8 +25,8 @@ type UsePluginMessagesOptions = {
   detuneParam: InitializedParam<number>;
   sampleStartParam: InitializedParam<number>;
   sampleEndParam: InitializedParam<number>;
-  resamplePointsInputParam: InitializedParam<number>;
-  resamplePointsPitchParam: InitializedParam<number>;
+  resampleQualityInputParam: InitializedParam<number>;
+  resampleQualityPitchParam: InitializedParam<number>;
   setStatus: Dispatch<SetStateAction<string>>;
   setEffectiveCacheDir: Dispatch<SetStateAction<string | null>>;
   setCacheDirOverride: Dispatch<SetStateAction<string | null>>;
@@ -61,8 +61,8 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         detuneParam,
         sampleStartParam,
         sampleEndParam,
-        resamplePointsInputParam,
-        resamplePointsPitchParam,
+        resampleQualityInputParam,
+        resampleQualityPitchParam,
         setStatus,
         setEffectiveCacheDir,
         setCacheDirOverride,
@@ -100,15 +100,15 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
             Math.round(message.projectSampleRate),
           );
         }
-        if (message.resamplePointsInput === null) {
-          resamplePointsInputParam.setFromPlugin(null);
-        } else if (typeof message.resamplePointsInput === "number") {
-          resamplePointsInputParam.setFromPlugin(message.resamplePointsInput);
+        if (message.resampleQualityInput === null) {
+          resampleQualityInputParam.setFromPlugin(null);
+        } else if (typeof message.resampleQualityInput === "number") {
+          resampleQualityInputParam.setFromPlugin(message.resampleQualityInput);
         }
-        if (message.resamplePointsPitch === null) {
-          resamplePointsPitchParam.setFromPlugin(null);
-        } else if (typeof message.resamplePointsPitch === "number") {
-          resamplePointsPitchParam.setFromPlugin(message.resamplePointsPitch);
+        if (message.resampleQualityPitch === null) {
+          resampleQualityPitchParam.setFromPlugin(null);
+        } else if (typeof message.resampleQualityPitch === "number") {
+          resampleQualityPitchParam.setFromPlugin(message.resampleQualityPitch);
         }
         if (message.sampleStart === null) {
           sampleStartParam.setFromPlugin(null);

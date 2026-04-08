@@ -17,7 +17,8 @@ use crate::cache::{
     sample_cache_exists, sample_dir, send_cached_sample_if_available, save_sample_to_cache,
 };
 use crate::constants::{
-    DEFAULT_RESAMPLE_POINTS, GUI_DEV_SERVER_URL, GUI_HEIGHT, GUI_PUBLISHED_URL, GUI_WIDTH,
+    DEFAULT_RESAMPLE_QUALITY_INPUT, DEFAULT_RESAMPLE_QUALITY_PITCH,
+    GUI_DEV_SERVER_URL, GUI_HEIGHT, GUI_PUBLISHED_URL, GUI_WIDTH,
 };
 use crate::params::TunableSamplerParams;
 use crate::pitch::spawn_pitch_estimate;
@@ -30,9 +31,10 @@ pub struct TunableSampler {
     pending_folder_dirty: Arc<AtomicBool>,
     sample_rate_hz: Arc<AtomicU32>,
     sample_rate_dirty: Arc<AtomicBool>,
-    resample_points_input: Arc<AtomicU32>,
-    resample_points_pitch: Arc<AtomicU32>,
+    resample_quality_input: Arc<AtomicU32>,
+    resample_quality_pitch: Arc<AtomicU32>,
     resample_requested: Arc<AtomicBool>,
+    resample_force: Arc<AtomicBool>,
     resample_in_progress: Arc<AtomicBool>,
     resample_events: Arc<Mutex<Vec<ResampleEvent>>>,
     resample_events_dirty: Arc<AtomicBool>,
@@ -49,9 +51,10 @@ impl Default for TunableSampler {
             pending_folder_dirty: Arc::new(AtomicBool::new(false)),
             sample_rate_hz: Arc::new(AtomicU32::new(0)),
             sample_rate_dirty: Arc::new(AtomicBool::new(false)),
-            resample_points_input: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_POINTS)),
-            resample_points_pitch: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_POINTS)),
+            resample_quality_input: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_QUALITY_INPUT)),
+            resample_quality_pitch: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_QUALITY_PITCH)),
             resample_requested: Arc::new(AtomicBool::new(false)),
+            resample_force: Arc::new(AtomicBool::new(false)),
             resample_in_progress: Arc::new(AtomicBool::new(false)),
             resample_events: Arc::new(Mutex::new(Vec::new())),
             resample_events_dirty: Arc::new(AtomicBool::new(false)),
@@ -67,8 +70,8 @@ impl TunableSampler {
         ctx: &WindowHandler,
         params: &Arc<TunableSamplerParams>,
         sample_rate_hz: &Arc<AtomicU32>,
-        resample_points_input: &Arc<AtomicU32>,
-        resample_points_pitch: &Arc<AtomicU32>,
+        resample_quality_input: &Arc<AtomicU32>,
+        resample_quality_pitch: &Arc<AtomicU32>,
     ) {
         let cache_dir_override = params.cache_dir.lock().ok().and_then(|g| g.clone());
         let effective_dir = effective_cache_dir(&cache_dir_override);
@@ -83,8 +86,8 @@ impl TunableSampler {
             "sampleStart": params.sample_start.value(),
             "sampleEnd": params.sample_end.value(),
             "projectSampleRate": sample_rate_hz.load(Ordering::Relaxed),
-            "resamplePointsInput": resample_points_input.load(Ordering::Relaxed),
-            "resamplePointsPitch": resample_points_pitch.load(Ordering::Relaxed),
+            "resampleQualityInput": resample_quality_input.load(Ordering::Relaxed),
+            "resampleQualityPitch": resample_quality_pitch.load(Ordering::Relaxed),
         }));
     }
 
@@ -175,9 +178,10 @@ impl Plugin for TunableSampler {
         let pending_folder_dirty = self.pending_folder_dirty.clone();
         let sample_rate_hz = self.sample_rate_hz.clone();
         let sample_rate_dirty = self.sample_rate_dirty.clone();
-        let resample_points_input = self.resample_points_input.clone();
-        let resample_points_pitch = self.resample_points_pitch.clone();
+        let resample_quality_input = self.resample_quality_input.clone();
+        let resample_quality_pitch = self.resample_quality_pitch.clone();
         let resample_requested = self.resample_requested.clone();
+        let resample_force = self.resample_force.clone();
         let resample_in_progress = self.resample_in_progress.clone();
         let resample_events = self.resample_events.clone();
         let resample_events_dirty = self.resample_events_dirty.clone();
@@ -201,8 +205,8 @@ impl Plugin for TunableSampler {
                                     ctx,
                                     &params,
                                     &sample_rate_hz,
-                                    &resample_points_input,
-                                    &resample_points_pitch,
+                                    &resample_quality_input,
+                                    &resample_quality_pitch,
                                 );
                             }
                             Action::RequestState => {
@@ -211,8 +215,8 @@ impl Plugin for TunableSampler {
                                     ctx,
                                     &params,
                                     &sample_rate_hz,
-                                    &resample_points_input,
-                                    &resample_points_pitch,
+                                    &resample_quality_input,
+                                    &resample_quality_pitch,
                                 );
                             }
                             Action::PickCacheDir => {
@@ -286,20 +290,24 @@ impl Plugin for TunableSampler {
                                 // Suppress echo: same reason as SetSampleStart above.
                                 params.sample_end_changed.store(false, Ordering::Relaxed);
                             }
-                            Action::SetResamplePointsInput { points } => {
-                                resample_points_input.store(points, Ordering::Relaxed);
+                            Action::SetResampleQualityInput { quality } => {
+                                resample_quality_input.store(quality, Ordering::Relaxed);
                                 resample_requested.store(true, Ordering::Relaxed);
                                 ctx.send_json(json!({
                                     "type": "State",
-                                    "resamplePointsInput": points,
+                                    "resampleQualityInput": quality,
                                 }));
                             }
-                            Action::SetResamplePointsPitch { points } => {
-                                resample_points_pitch.store(points, Ordering::Relaxed);
+                            Action::SetResampleQualityPitch { quality } => {
+                                resample_quality_pitch.store(quality, Ordering::Relaxed);
                                 ctx.send_json(json!({
                                     "type": "State",
-                                    "resamplePointsPitch": points,
+                                    "resampleQualityPitch": quality,
                                 }));
+                            }
+                            Action::ForceResample => {
+                                resample_force.store(true, Ordering::Relaxed);
+                                resample_requested.store(true, Ordering::Relaxed);
                             }
                             Action::RequestPitchEstimate { sample_start } => {
                                 if !pitch_in_progress.load(Ordering::Relaxed) {
@@ -551,11 +559,13 @@ impl Plugin for TunableSampler {
                         let target_rate = sample_rate_hz.load(Ordering::Relaxed);
                         if target_rate > 0 && sample_cache_exists(&s_dir) {
                             resample_requested.store(false, Ordering::Relaxed);
+                            let force = resample_force.swap(false, Ordering::Relaxed);
                             resample_in_progress.store(true, Ordering::Relaxed);
                             spawn_resample_task(
                                 s_dir,
                                 target_rate,
-                                resample_points_input.load(Ordering::Relaxed),
+                                resample_quality_input.load(Ordering::Relaxed),
+                                force,
                                 resample_in_progress.clone(),
                                 resample_events.clone(),
                                 resample_events_dirty.clone(),

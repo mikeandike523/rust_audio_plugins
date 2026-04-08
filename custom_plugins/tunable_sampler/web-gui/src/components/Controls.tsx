@@ -1,4 +1,4 @@
-import { RESAMPLE_OPTIONS } from "../constants";
+import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
 type ControlsProps = {
   gain: number | null;
@@ -6,10 +6,11 @@ type ControlsProps = {
   detune: number | null;
   onDetuneChange: (value: number) => void;
   onDetuneReset: () => void;
-  resamplePointsInput: number | null;
-  resamplePointsPitch: number | null;
-  onResamplePointsInputChange: (value: number) => void;
-  onResamplePointsPitchChange: (value: number) => void;
+  resampleQualityInput: number | null;
+  resampleQualityPitch: number | null;
+  onResampleQualityInputChange: (value: number) => void;
+  onResampleQualityPitchChange: (value: number) => void;
+  onForceResample: () => void;
 };
 
 export const Controls = ({
@@ -18,10 +19,11 @@ export const Controls = ({
   detune,
   onDetuneChange,
   onDetuneReset,
-  resamplePointsInput,
-  resamplePointsPitch,
-  onResamplePointsInputChange,
-  onResamplePointsPitchChange,
+  resampleQualityInput,
+  resampleQualityPitch,
+  onResampleQualityInputChange,
+  onResampleQualityPitchChange,
+  onForceResample,
 }: ControlsProps) => (
   <section className="controls">
     <div className="control">
@@ -62,27 +64,32 @@ export const Controls = ({
     </div>
 
     <div className="control">
-      <label htmlFor="resample-input">Resample · Project Match</label>
-      <select
-        id="resample-input"
-        value={resamplePointsInput ?? RESAMPLE_OPTIONS[2]}
-        onChange={(e) => onResamplePointsInputChange(Number(e.target.value))}
-      >
-        {RESAMPLE_OPTIONS.map((o) => (
-          <option key={o} value={o}>{o} pts</option>
-        ))}
-      </select>
+      <label htmlFor="resample-input">Resample · Rate Match</label>
+      <div className="control-row">
+        <select
+          id="resample-input"
+          value={resampleQualityInput ?? 2}
+          onChange={(e) => onResampleQualityInputChange(Number(e.target.value))}
+        >
+          {RESAMPLE_QUALITY_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <button className="mini-button" type="button" onClick={onForceResample}>
+          Force ↻
+        </button>
+      </div>
     </div>
 
     <div className="control">
       <label htmlFor="resample-pitch">Resample · Pitch Adjust</label>
       <select
         id="resample-pitch"
-        value={resamplePointsPitch ?? RESAMPLE_OPTIONS[2]}
-        onChange={(e) => onResamplePointsPitchChange(Number(e.target.value))}
+        value={resampleQualityPitch ?? 0}
+        onChange={(e) => onResampleQualityPitchChange(Number(e.target.value))}
       >
-        {RESAMPLE_OPTIONS.map((o) => (
-          <option key={o} value={o}>{o} pts</option>
+        {RESAMPLE_QUALITY_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
     </div>

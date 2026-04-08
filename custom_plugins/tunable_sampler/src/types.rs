@@ -12,8 +12,9 @@ pub enum Action {
     SetGain { value: f32 },
     SetSampleStart { value: f32 },
     SetSampleEnd { value: f32 },
-    SetResamplePointsInput { points: u32 },
-    SetResamplePointsPitch { points: u32 },
+    SetResampleQualityInput { quality: u32 },
+    SetResampleQualityPitch { quality: u32 },
+    ForceResample,
     SaveSample {
         name: String,
         sample_rate: u32,
@@ -49,7 +50,10 @@ pub struct ResampledMetadata {
     pub frames: u32,
     pub source_sample_rate: u32,
     pub source_frames: u32,
-    pub points: u32,
+    /// Quality preset index (0=Normal, 1=High, 2=UltraHigh).
+    /// Defaults to 0 so old cache files (missing this field) always trigger a re-resample.
+    #[serde(default)]
+    pub quality: u32,
 }
 
 pub enum ResampleEvent {

@@ -414,6 +414,11 @@ body {
   cursor: not-allowed;
 }
 
+.control-row select {
+  flex: 1;
+  min-width: 0;
+}
+
 .control select {
   width: 100%;
   border-radius: 8px;
