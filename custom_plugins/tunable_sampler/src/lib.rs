@@ -4,6 +4,7 @@ mod constants;
 mod params;
 mod pitch;
 mod resample;
+mod remote_logging;
 mod tuning;
 mod types;
 
@@ -27,6 +28,7 @@ use crate::constants::{
 };
 use crate::params::TunableSamplerParams;
 use crate::pitch::spawn_pitch_estimate;
+use crate::remote_logging::RemoteLogger;
 use crate::resample::spawn_resample_task;
 use crate::types::{Action, FolderSelectionResult, PitchEvent, ResampleEvent};
 use crate::adsr::{EnvelopeParams, is_finished, value_at};
@@ -122,6 +124,7 @@ pub struct TunableSampler {
     voice_seq: u64,
     sample_clock: u64,
     pitch_bend: f32,
+    remote_logger: RemoteLogger,
 }
 
 impl Default for TunableSampler {
@@ -148,6 +151,7 @@ impl Default for TunableSampler {
             voice_seq: 0,
             sample_clock: 0,
             pitch_bend: 0.5,
+            remote_logger: RemoteLogger::new(9099),
         }
     }
 }
@@ -481,6 +485,7 @@ impl Plugin for TunableSampler {
         let pitch_events_dirty = self.pitch_events_dirty.clone();
         let tuning_state = self.tuning_state.clone();
         let runtime_sample = self.runtime_sample.clone();
+        let remote_logger = self.remote_logger.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
         // Tracks which UUID we last sent a cached sample for, to avoid re-sending.
@@ -720,8 +725,16 @@ impl Plugin for TunableSampler {
                                 resample_requested.store(true, Ordering::Relaxed);
                             }
                             Action::RequestPitchEstimate { sample_start } => {
+                                remote_logger.log_step(
+                                    "pitch_request",
+                                    format!("sample_start={sample_start:.4} in_progress={}", pitch_in_progress.load(Ordering::Relaxed)),
+                                );
                                 if !pitch_in_progress.load(Ordering::Relaxed) {
                                     if let Some(s_dir) = get_sample_dir(&params.cache_dir, &params.sample_uuid) {
+                                        remote_logger.log_step(
+                                            "pitch_request_path",
+                                            format!("path={} exists={}", s_dir.display(), sample_cache_exists(&s_dir)),
+                                        );
                                         if sample_cache_exists(&s_dir) {
                                             pitch_in_progress.store(true, Ordering::Relaxed);
                                             ctx.send_json(json!({ "type": "PitchEstimating" }));
@@ -731,9 +744,16 @@ impl Plugin for TunableSampler {
                                                 pitch_in_progress.clone(),
                                                 pitch_events.clone(),
                                                 pitch_events_dirty.clone(),
+                                                remote_logger.clone(),
                                             );
+                                        } else {
+                                            remote_logger.log_step("pitch_request_skip", "sample cache missing".to_string());
                                         }
+                                    } else {
+                                        remote_logger.log_step("pitch_request_skip", "no sample dir".to_string());
                                     }
+                                } else {
+                                    remote_logger.log_step("pitch_request_skip", "already in progress".to_string());
                                 }
                             }
                             Action::SaveSample {
@@ -977,6 +997,7 @@ impl Plugin for TunableSampler {
                         for event in events {
                             match event {
                                 PitchEvent::Detected { hz } => {
+                                    remote_logger.log_step("pitch_event_detected", format!("hz={hz:.3}"));
                                     *params.detected_pitch_hz.lock().unwrap() = Some(hz as f32);
                                     let nudge_to_12edo =
                                         params.nudge_to_12edo.lock().ok().map(|g| *g).unwrap_or(false);
@@ -994,9 +1015,11 @@ impl Plugin for TunableSampler {
                                     }));
                                 }
                                 PitchEvent::NoResult => {
+                                    remote_logger.log_step("pitch_event_no_result", "queue drained to no result".to_string());
                                     ctx.send_json(json!({ "type": "PitchNoResult" }));
                                 }
                                 PitchEvent::Error { message } => {
+                                    remote_logger.log_step("pitch_event_error", message.clone());
                                     ctx.send_json(json!({
                                         "type": "PitchEstimateError",
                                         "message": message,

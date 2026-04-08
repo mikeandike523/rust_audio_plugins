@@ -302,11 +302,13 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
 
       if (message.type === "PitchDetected") {
         setPitchHz(message.hz);
+        setStatus(`Pitch detected: ${message.hz.toFixed(2)} Hz`);
         removeTask("pitch");
       }
 
       if (message.type === "PitchNoResult") {
         setPitchHz(null);
+        setStatus("No pitch detected at current start position");
         removeTask("pitch");
       }
 

@@ -1,5 +1,5 @@
 pub const GUI_WIDTH: u32 = 1000;
-pub const GUI_HEIGHT: u32 = 800;
+pub const GUI_HEIGHT: u32 = 880;
 pub const GUI_DEV_SERVER_URL: &str = "http://localhost:5173";
 pub const GUI_PUBLISHED_URL: &str = "https://tunable-sampler-web-gui.vercel.app";
 /// Default quality for offline sample-rate matching: Ultra High (2).
