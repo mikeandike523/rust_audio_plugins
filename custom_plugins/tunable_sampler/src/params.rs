@@ -13,6 +13,10 @@ pub struct TunableSamplerParams {
     #[id = "sample_end"]
     pub sample_end: FloatParam,
     pub sample_end_changed: Arc<AtomicBool>,
+    /// Fine-tune offset in cents (−100 to +100). Not yet wired to DSP.
+    #[id = "detune"]
+    pub detune: FloatParam,
+    pub detune_changed: Arc<AtomicBool>,
     /// Optional custom cache directory override. None = use platform default.
     #[persist = "cache_dir"]
     pub cache_dir: Arc<Mutex<Option<String>>>,
@@ -38,6 +42,11 @@ impl Default for TunableSamplerParams {
         let sample_end_changed_cb = sample_end_changed.clone();
         let sample_end_callback = Arc::new(move |_: f32| {
             sample_end_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let detune_changed = Arc::new(AtomicBool::new(false));
+        let detune_changed_cb = detune_changed.clone();
+        let detune_callback = Arc::new(move |_: f32| {
+            detune_changed_cb.store(true, Ordering::Relaxed);
         });
 
         Self {
@@ -70,6 +79,18 @@ impl Default for TunableSamplerParams {
             .with_step_size(0.001)
             .with_callback(sample_end_callback),
             sample_end_changed,
+            detune: FloatParam::new(
+                "Detune",
+                0.0,
+                FloatRange::Linear {
+                    min: -100.0,
+                    max: 100.0,
+                },
+            )
+            .with_step_size(0.1)
+            .with_unit(" ¢")
+            .with_callback(detune_callback),
+            detune_changed,
             cache_dir: Arc::new(Mutex::new(None)),
             sample_uuid: Arc::new(Mutex::new(None)),
         }

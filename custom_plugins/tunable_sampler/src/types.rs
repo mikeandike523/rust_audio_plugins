@@ -22,6 +22,7 @@ pub enum Action {
         data_base64: String,
     },
     RequestPitchEstimate { sample_start: f32 },
+    SetDetune { value: f32 },
 }
 
 #[derive(Deserialize)]

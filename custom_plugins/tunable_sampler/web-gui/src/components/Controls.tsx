@@ -3,6 +3,9 @@ import { RESAMPLE_OPTIONS } from "../constants";
 type ControlsProps = {
   gain: number | null;
   onGainChange: (value: number) => void;
+  detune: number | null;
+  onDetuneChange: (value: number) => void;
+  onDetuneReset: () => void;
   resamplePointsInput: number | null;
   resamplePointsPitch: number | null;
   onResamplePointsInputChange: (value: number) => void;
@@ -12,6 +15,9 @@ type ControlsProps = {
 export const Controls = ({
   gain,
   onGainChange,
+  detune,
+  onDetuneChange,
+  onDetuneReset,
   resamplePointsInput,
   resamplePointsPitch,
   onResamplePointsInputChange,
@@ -32,6 +38,26 @@ export const Controls = ({
           disabled={gain === null}
         />
         <span className="value">{gain === null ? "—" : `${gain >= 0 ? "+" : ""}${gain.toFixed(1)} dB`}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="detune">Detune</label>
+      <div className="control-row">
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+        <div onDoubleClick={onDetuneReset} title="Double-click to reset">
+          <input
+            id="detune"
+            type="range"
+            min="-100"
+            max="100"
+            step="0.1"
+            value={detune ?? 0}
+            onChange={(e) => onDetuneChange(Number(e.target.value))}
+            disabled={detune === null}
+          />
+        </div>
+        <span className="value">{detune === null ? "—" : `${detune >= 0 ? "+" : ""}${detune.toFixed(1)}¢`}</span>
       </div>
     </div>
 

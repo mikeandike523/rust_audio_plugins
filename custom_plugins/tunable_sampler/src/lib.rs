@@ -79,6 +79,7 @@ impl TunableSampler {
             "effectiveCacheDir": effective_dir.to_string_lossy(),
             "cacheDirOverride": cache_dir_override,
             "gain": params.gain.value(),
+            "detune": params.detune.value(),
             "sampleStart": params.sample_start.value(),
             "sampleEnd": params.sample_end.value(),
             "projectSampleRate": sample_rate_hz.load(Ordering::Relaxed),
@@ -261,6 +262,13 @@ impl Plugin for TunableSampler {
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
                             }
+                            Action::SetDetune { value } => {
+                                let clamped = value.clamp(-100.0, 100.0);
+                                setter.begin_set_parameter(&params.detune);
+                                setter.set_parameter(&params.detune, clamped);
+                                setter.end_set_parameter(&params.detune);
+                                params.detune_changed.store(false, Ordering::Relaxed);
+                            }
                             Action::SetSampleStart { value } => {
                                 let clamped = value.clamp(0.0, 1.0);
                                 setter.begin_set_parameter(&params.sample_start);
@@ -407,6 +415,13 @@ impl Plugin for TunableSampler {
                     ctx.send_json(json!({
                         "type": "State",
                         "gain": params.gain.value(),
+                    }));
+                }
+
+                if params.detune_changed.swap(false, Ordering::Relaxed) {
+                    ctx.send_json(json!({
+                        "type": "State",
+                        "detune": params.detune.value(),
                     }));
                 }
 

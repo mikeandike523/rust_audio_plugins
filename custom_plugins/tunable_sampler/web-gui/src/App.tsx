@@ -24,6 +24,9 @@ export default function App() {
   const [resampleFading, setResampleFading] = useState(false);
   const [pitchHz, setPitchHz] = useState<number | null>(null);
   const [pitchLoading, setPitchLoading] = useState(false);
+  // true when nudge checkbox changed (or start pos changed) since the last estimate
+  const [pitchStale, setPitchStale] = useState(false);
+  const [nudgeTo12edo, setNudgeTo12edo] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
@@ -45,8 +48,14 @@ export default function App() {
     pollMs: null,
   });
 
+  // Stable sendPayload factories — must not be inline arrow fns or they recreate
+  // setValue on every render, which destabilises throttled drag handlers.
   const gainSendPayload = useCallback(
     (value: number) => ({ type: "SetGain", value }),
+    [],
+  );
+  const detuneSendPayload = useCallback(
+    (value: number) => ({ type: "SetDetune", value }),
     [],
   );
   const sampleStartSendPayload = useCallback(
@@ -70,6 +79,14 @@ export default function App() {
     name: "gain",
     requestPayload: requestStatePayload,
     sendPayload: gainSendPayload,
+    pollMs: null,
+  });
+
+  const detuneParam = useInitializedParam<number>({
+    name: "detune",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: detuneSendPayload,
     pollMs: null,
   });
 
@@ -113,6 +130,7 @@ export default function App() {
   }, []);
 
   const handleRecalcPitch = useCallback(() => {
+    setPitchStale(false);
     sendToPluginSafe({
       type: "RequestPitchEstimate",
       sample_start: sampleStartParam.value ?? 0,
@@ -126,6 +144,7 @@ export default function App() {
     sendToPluginSafe({ type: "RequestPitchEstimate", sample_start: 0 });
     setPitchLoading(true);
     setPitchHz(null);
+    setPitchStale(false);
   }, []);
 
   const onCachedSampleLoaded = useCallback(() => {
@@ -134,12 +153,14 @@ export default function App() {
       sample_start: sampleStartParam.value ?? 0,
     });
     setPitchLoading(true);
+    setPitchStale(false);
   }, [sampleStartParam.value]);
 
   usePluginMessages({
     pluginVersionParam,
     projectSampleRateParam,
     gainParam,
+    detuneParam,
     sampleStartParam,
     sampleEndParam,
     resamplePointsInputParam,
@@ -160,10 +181,16 @@ export default function App() {
     getAudioContext,
   });
 
+  // Clear stale whenever a pitch result arrives (detected or no-result).
+  useEffect(() => {
+    setPitchStale(false);
+  }, [pitchHz]);
+
   const allParamsReady =
     pluginVersionParam.ready &&
     projectSampleRateParam.ready &&
     gainParam.ready &&
+    detuneParam.ready &&
     sampleStartParam.ready &&
     sampleEndParam.ready &&
     resamplePointsInputParam.ready &&
@@ -203,6 +230,10 @@ export default function App() {
 
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
 
+  const handleDetuneChange = (value: number) =>
+    detuneParam.setValue(clamp(value, -100, 100));
+  const handleDetuneReset = () => detuneParam.setValue(0);
+
   const { setValue: setSampleStart } = sampleStartParam;
   const { setValue: setSampleEnd } = sampleEndParam;
 
@@ -231,6 +262,14 @@ export default function App() {
     setSampleStart(0);
     setSampleEnd(1);
   }, [sampleInfo, setSampleStart, setSampleEnd]);
+
+  const handleNudgeChange = (checked: boolean) => {
+    setNudgeTo12edo(checked);
+    // Require recalculate after toggling nudge mode (same UX as changing start pos).
+    if (pitchHz !== null) {
+      setPitchStale(true);
+    }
+  };
 
   const isCustomDir = cacheDirOverride !== null;
   const pitchNote = pitchHz !== null ? hzToNoteInfo(pitchHz) : null;
@@ -297,21 +336,29 @@ export default function App() {
         {/* Pitch */}
         <div className="info-block">
           <div className="section-label">Pitch @ Start</div>
-          <div className="pitch-readout">
+          <div className={`pitch-readout${pitchStale ? " is-stale" : ""}`}>
             {pitchLoading
               ? "Estimating…"
               : pitchNote !== null
-                ? formatPitchReadout(pitchNote)
+                ? formatPitchReadout(pitchNote, nudgeTo12edo)
                 : "—"}
           </div>
+          <label className="nudge-label">
+            <input
+              type="checkbox"
+              checked={nudgeTo12edo}
+              onChange={(e) => handleNudgeChange(e.target.checked)}
+            />
+            Nudge to nearest 12-EDO
+          </label>
           {sampleInfo && (
             <button
-              className="mini-button"
+              className={`mini-button${pitchStale ? " needs-update" : ""}`}
               type="button"
               onClick={handleRecalcPitch}
               disabled={pitchLoading}
             >
-              Recalculate Pitch@Start
+              {pitchStale ? "Recalculate ↻" : "Recalculate Pitch@Start"}
             </button>
           )}
         </div>
@@ -320,6 +367,9 @@ export default function App() {
       <Controls
         gain={gainParam.value}
         onGainChange={handleGainChange}
+        detune={detuneParam.value}
+        onDetuneChange={handleDetuneChange}
+        onDetuneReset={handleDetuneReset}
         resamplePointsInput={resamplePointsInputParam.value}
         resamplePointsPitch={resamplePointsPitchParam.value}
         onResamplePointsInputChange={(v) => { if (!Number.isNaN(v)) resamplePointsInputParam.setValue(v); }}

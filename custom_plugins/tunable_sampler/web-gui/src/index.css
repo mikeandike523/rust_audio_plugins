@@ -325,11 +325,32 @@ body {
 
 .mini-button:hover { background: #ffe8d4; }
 .mini-button:disabled { opacity: 0.45; cursor: not-allowed; }
+.mini-button.needs-update {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-dark);
+}
+.mini-button.needs-update:hover { background: var(--accent-dark); }
+
+.nudge-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pitch-readout.is-stale {
+  opacity: 0.45;
+  font-style: italic;
+}
 
 /* ── Controls (horizontal) ── */
 .controls {
   display: grid;
-  grid-template-columns: 1.5fr 1fr 1fr;
+  grid-template-columns: 1.5fr 1.5fr 1fr 1fr;
   gap: 10px;
   padding: 8px 10px;
   border-radius: 10px;

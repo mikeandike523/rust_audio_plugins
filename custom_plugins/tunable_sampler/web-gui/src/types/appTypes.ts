@@ -10,6 +10,7 @@ export type PluginMessage =
       sampleStart?: number | null;
       sampleEnd?: number | null;
       gain?: number | null;
+      detune?: number | null;
     }
   | {
       type: "CacheDirError";

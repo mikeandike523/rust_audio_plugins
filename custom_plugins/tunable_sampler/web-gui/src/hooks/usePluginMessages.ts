@@ -22,6 +22,7 @@ type UsePluginMessagesOptions = {
   pluginVersionParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
+  detuneParam: InitializedParam<number>;
   sampleStartParam: InitializedParam<number>;
   sampleEndParam: InitializedParam<number>;
   resamplePointsInputParam: InitializedParam<number>;
@@ -57,6 +58,7 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         pluginVersionParam,
         projectSampleRateParam,
         gainParam,
+        detuneParam,
         sampleStartParam,
         sampleEndParam,
         resamplePointsInputParam,
@@ -122,6 +124,11 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
           gainParam.setFromPlugin(null);
         } else if (typeof message.gain === "number") {
           gainParam.setFromPlugin(clamp(message.gain, -24, 24));
+        }
+        if (message.detune === null) {
+          detuneParam.setFromPlugin(null);
+        } else if (typeof message.detune === "number") {
+          detuneParam.setFromPlugin(clamp(message.detune, -100, 100));
         }
         setStatus(nextStatus);
       }
