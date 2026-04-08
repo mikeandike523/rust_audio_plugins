@@ -1,43 +1,79 @@
-use crate::constants::CACHE_FOLDER_NAME;
 use crate::types::{CachedSample, FolderSelectionResult, ResampledMetadata, SampleMetadata};
 use base64::{engine::general_purpose, Engine as _};
+use directories::ProjectDirs;
 use nih_plug_webview::WindowHandler;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub fn normalize_project_folder(path: PathBuf) -> Result<PathBuf, String> {
-    if path.is_dir() {
-        return Ok(path);
+// ---------------------------------------------------------------------------
+// Cache directory resolution
+// ---------------------------------------------------------------------------
+
+pub fn default_cache_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "TunableSampler") {
+        proj.data_local_dir().join("cache")
+    } else {
+        PathBuf::from("tunable_sampler_cache")
     }
-    if path.is_file() {
-        return path
-            .parent()
-            .map(|parent| parent.to_path_buf())
-            .ok_or_else(|| "Dropped file has no parent directory".to_string());
-    }
-    Err("Selected path does not exist".to_string())
 }
 
-pub fn ensure_cache_folder(project_folder: &Path) -> Result<PathBuf, String> {
-    let cache_folder = project_folder.join(CACHE_FOLDER_NAME);
-    std::fs::create_dir_all(&cache_folder)
-        .map_err(|err| format!("Failed to create cache folder: {err}"))?;
-    Ok(cache_folder)
+pub fn effective_cache_dir(override_dir: &Option<String>) -> PathBuf {
+    match override_dir {
+        Some(s) => PathBuf::from(s),
+        None => default_cache_dir(),
+    }
 }
 
-pub fn resolve_project_folder(
-    project_folder: &Arc<Mutex<Option<String>>>,
-    path: String,
-) -> Result<(PathBuf, PathBuf), String> {
-    let folder = normalize_project_folder(PathBuf::from(path))?;
-    let cache_folder = ensure_cache_folder(&folder)?;
-    if let Ok(mut guard) = project_folder.lock() {
-        *guard = Some(folder.to_string_lossy().to_string());
-    }
-    Ok((folder, cache_folder))
+// ---------------------------------------------------------------------------
+// UUID generation — 8 lowercase hex chars, collision-checked against cache dir
+// ---------------------------------------------------------------------------
+
+fn random_hex8() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::SystemTime;
+
+    let mut h = DefaultHasher::new();
+    SystemTime::now().hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    CTR.fetch_add(1, Ordering::Relaxed).hash(&mut h);
+    format!("{:08x}", h.finish() as u32)
 }
+
+/// Generate a cache key that does not already exist as a subdirectory of `cache_dir`.
+pub fn new_unique_cache_key(cache_dir: &Path) -> String {
+    loop {
+        let key = random_hex8();
+        if !cache_dir.join(&key).exists() {
+            return key;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sample dir helpers
+// ---------------------------------------------------------------------------
+
+pub fn sample_dir(cache_dir: &Path, uuid: &str) -> PathBuf {
+    cache_dir.join(uuid)
+}
+
+pub fn get_sample_dir(
+    cache_dir: &Arc<Mutex<Option<String>>>,
+    sample_uuid: &Arc<Mutex<Option<String>>>,
+) -> Option<PathBuf> {
+    let override_dir = cache_dir.lock().ok().and_then(|g| g.clone());
+    let cache = effective_cache_dir(&override_dir);
+    let uuid = sample_uuid.lock().ok().and_then(|g| g.clone())?;
+    Some(sample_dir(&cache, &uuid))
+}
+
+// ---------------------------------------------------------------------------
+// Async folder picker result queue
+// ---------------------------------------------------------------------------
 
 pub fn queue_folder_result(
     pending_folder_result: &Arc<Mutex<Option<FolderSelectionResult>>>,
@@ -50,40 +86,13 @@ pub fn queue_folder_result(
     pending_folder_dirty.store(true, Ordering::Relaxed);
 }
 
-pub fn build_project_state(
-    project_folder: &Arc<Mutex<Option<String>>>,
-) -> (Option<String>, Option<String>, Option<String>) {
-    if let Ok(guard) = project_folder.lock() {
-        if let Some(existing) = guard.as_ref() {
-            let folder_path = PathBuf::from(existing);
-            let project_name = folder_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.to_string());
-            let cache_folder = folder_path.join(CACHE_FOLDER_NAME);
-            return (
-                Some(existing.clone()),
-                Some(cache_folder.to_string_lossy().to_string()),
-                project_name,
-            );
-        }
-    }
+// ---------------------------------------------------------------------------
+// Cache I/O
+// ---------------------------------------------------------------------------
 
-    (None, None, None)
-}
-
-pub fn cache_folder_from_params(project_folder: &Arc<Mutex<Option<String>>>) -> Option<PathBuf> {
-    project_folder
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
-        .map(PathBuf::from)
-        .map(|folder| folder.join(CACHE_FOLDER_NAME))
-}
-
-pub fn load_cached_sample(cache_folder: &Path) -> Result<Option<CachedSample>, String> {
-    let array_path = cache_folder.join("sample.array");
-    let json_path = cache_folder.join("sample.json");
+pub fn load_cached_sample(sample_dir: &Path) -> Result<Option<CachedSample>, String> {
+    let array_path = sample_dir.join("sample.array");
+    let json_path = sample_dir.join("sample.json");
     if !(array_path.is_file() && json_path.is_file()) {
         return Ok(None);
     }
@@ -118,9 +127,9 @@ pub fn load_cached_sample(cache_folder: &Path) -> Result<Option<CachedSample>, S
 
 pub fn send_cached_sample_if_available(
     ctx: &WindowHandler,
-    cache_folder: &Path,
+    sample_dir: &Path,
 ) -> Result<bool, String> {
-    match load_cached_sample(cache_folder)? {
+    match load_cached_sample(sample_dir)? {
         Some(sample) => {
             ctx.send_json(json!({
                 "type": "CachedSample",
@@ -137,7 +146,7 @@ pub fn send_cached_sample_if_available(
 }
 
 pub fn save_sample_to_cache(
-    cache_folder: &Path,
+    sample_dir: &Path,
     name: &str,
     sample_rate: u32,
     channels: u16,
@@ -158,7 +167,10 @@ pub fn save_sample_to_cache(
         ));
     }
 
-    let array_path = cache_folder.join("sample.array");
+    std::fs::create_dir_all(sample_dir)
+        .map_err(|err| format!("Failed to create sample dir: {err}"))?;
+
+    let array_path = sample_dir.join("sample.array");
     std::fs::write(&array_path, decoded)
         .map_err(|err| format!("Failed to write sample.array: {err}"))?;
 
@@ -171,7 +183,7 @@ pub fn save_sample_to_cache(
         "format": "f32le",
         "layout": "interleaved"
     });
-    let json_path = cache_folder.join("sample.json");
+    let json_path = sample_dir.join("sample.json");
     let json_bytes = serde_json::to_vec_pretty(&metadata)
         .map_err(|err| format!("Failed to serialize sample.json: {err}"))?;
     std::fs::write(&json_path, json_bytes)
@@ -180,13 +192,13 @@ pub fn save_sample_to_cache(
     Ok(())
 }
 
-pub fn sample_cache_exists(cache_folder: &Path) -> bool {
-    cache_folder.join("sample.array").is_file() && cache_folder.join("sample.json").is_file()
+pub fn sample_cache_exists(sample_dir: &Path) -> bool {
+    sample_dir.join("sample.array").is_file() && sample_dir.join("sample.json").is_file()
 }
 
-pub fn load_sample_data(cache_folder: &Path) -> Result<(SampleMetadata, Vec<f32>), String> {
-    let array_path = cache_folder.join("sample.array");
-    let json_path = cache_folder.join("sample.json");
+pub fn load_sample_data(sample_dir: &Path) -> Result<(SampleMetadata, Vec<f32>), String> {
+    let array_path = sample_dir.join("sample.array");
+    let json_path = sample_dir.join("sample.json");
     if !(array_path.is_file() && json_path.is_file()) {
         return Err("Sample cache is missing.".to_string());
     }
@@ -218,8 +230,8 @@ pub fn load_sample_data(cache_folder: &Path) -> Result<(SampleMetadata, Vec<f32>
     Ok((metadata, data))
 }
 
-pub fn load_resampled_metadata(cache_folder: &Path) -> Result<Option<ResampledMetadata>, String> {
-    let json_path = cache_folder.join("resampled.json");
+pub fn load_resampled_metadata(sample_dir: &Path) -> Result<Option<ResampledMetadata>, String> {
+    let json_path = sample_dir.join("resampled.json");
     if !json_path.is_file() {
         return Ok(None);
     }

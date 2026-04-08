@@ -10,14 +10,14 @@ import type { ResampleModalState, SampleInfo } from "./types/appTypes";
 import { Controls } from "./components/Controls";
 import { Footer } from "./components/Footer";
 import { ProjectCard } from "./components/ProjectCard";
-import { ProjectFolderModal } from "./components/ProjectFolderModal";
 import { ResampleModal } from "./components/ResampleModal";
 import { SampleDrop } from "./components/SampleDrop";
 
 export default function App() {
   const [status, setStatus] = useState("Waiting for plugin...");
-  const [cacheFolder, setCacheFolder] = useState<string | null>(null);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [effectiveCacheDir, setEffectiveCacheDir] = useState<string | null>(null);
+  const [cacheDirOverride, setCacheDirOverride] = useState<string | null>(null);
+  const [cacheDirError, setCacheDirError] = useState<string | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [sampleInfo, setSampleInfo] = useState<SampleInfo | null>(null);
   const [resampleModal, setResampleModal] =
@@ -34,19 +34,6 @@ export default function App() {
 
   const pluginVersionParam = useInitializedParam<string>({
     name: "pluginVersion",
-    requestPayload: requestStatePayload,
-    pollMs: null,
-  });
-
-  const projectFolderParam = useInitializedParam<string>({
-    name: "projectFolder",
-    requestPayload: requestStatePayload,
-    sendPayload: (value) => ({ type: "SetProjectFolder", path: value }),
-    pollMs: null,
-  });
-
-  const projectNameParam = useInitializedParam<string>({
-    name: "projectName",
     requestPayload: requestStatePayload,
     pollMs: null,
   });
@@ -119,8 +106,6 @@ export default function App() {
     pollMs: null,
   });
 
-  const needsProjectFolder = projectFolderParam.value === null;
-
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext();
@@ -130,8 +115,6 @@ export default function App() {
 
   usePluginMessages({
     pluginVersionParam,
-    projectFolderParam,
-    projectNameParam,
     projectSampleRateParam,
     gainParam,
     sampleStartParam,
@@ -139,8 +122,9 @@ export default function App() {
     resamplePointsInputParam,
     resamplePointsPitchParam,
     setStatus,
-    setCacheFolder,
-    setFolderError,
+    setEffectiveCacheDir,
+    setCacheDirOverride,
+    setCacheDirError,
     setSampleError,
     setSampleInfo,
     setResampleModal,
@@ -151,8 +135,6 @@ export default function App() {
 
   const allParamsReady =
     pluginVersionParam.ready &&
-    projectFolderParam.ready &&
-    projectNameParam.ready &&
     projectSampleRateParam.ready &&
     gainParam.ready &&
     sampleStartParam.ready &&
@@ -183,7 +165,6 @@ export default function App() {
   });
 
   const { handleAudioFile, isDecoding } = useSampleLoader({
-    cacheFolder,
     audioBufferRef,
     getAudioContext,
     onSampleInfo: setSampleInfo,
@@ -191,10 +172,14 @@ export default function App() {
     onStatus: setStatus,
   });
 
-  const handleProjectFolderPicker = () => {
-    setFolderError(null);
+  const handlePickCacheDir = () => {
+    setCacheDirError(null);
     setStatus("Opening folder picker...");
-    sendToPluginSafe({ type: "PickProjectFolder" });
+    sendToPluginSafe({ type: "PickCacheDir" });
+  };
+
+  const handleClearCacheDir = () => {
+    sendToPluginSafe({ type: "ClearCacheDir" });
   };
 
   const handleGainChange = (value: number) => {
@@ -264,12 +249,12 @@ export default function App() {
 
       <section className="workspace">
         <ProjectCard
-          projectFolder={projectFolderParam.value}
-          projectName={projectNameParam.value}
-          cacheFolder={cacheFolder}
+          effectiveCacheDir={effectiveCacheDir}
+          cacheDirOverride={cacheDirOverride}
           projectSampleRate={projectSampleRateParam.value}
-          folderError={folderError}
-          onPickFolder={handleProjectFolderPicker}
+          cacheDirError={cacheDirError}
+          onPickCacheDir={handlePickCacheDir}
+          onClearCacheDir={handleClearCacheDir}
         />
 
         <SampleDrop
@@ -305,12 +290,6 @@ export default function App() {
       <ResampleModal
         resampleModal={resampleModal}
         resampleFading={resampleFading}
-      />
-
-      <ProjectFolderModal
-        show={needsProjectFolder}
-        folderError={folderError}
-        onPickFolder={handleProjectFolderPicker}
       />
     </div>
   );

@@ -3555,6 +3555,7 @@ name = "tunable_sampler"
 version = "0.0.10"
 dependencies = [
  "base64 0.22.1",
+ "directories",
  "nih_plug",
  "nih_plug_webview",
  "serde",

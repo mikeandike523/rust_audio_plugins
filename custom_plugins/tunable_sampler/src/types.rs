@@ -6,8 +6,9 @@ use std::path::PathBuf;
 pub enum Action {
     Init,
     RequestState,
-    PickProjectFolder,
-    SetProjectFolder { path: String },
+    PickCacheDir,
+    SetCacheDir { path: String },
+    ClearCacheDir,
     SetGain { value: f32 },
     SetSampleStart { value: f32 },
     SetSampleEnd { value: f32 },
@@ -57,12 +58,7 @@ pub enum ResampleEvent {
 }
 
 pub enum FolderSelectionResult {
-    Selected {
-        folder: PathBuf,
-        cache_folder: PathBuf,
-    },
+    Selected { path: PathBuf },
     Canceled,
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }

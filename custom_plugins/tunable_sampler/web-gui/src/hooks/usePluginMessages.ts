@@ -20,8 +20,6 @@ type InitializedParam<T> = {
 
 type UsePluginMessagesOptions = {
   pluginVersionParam: InitializedParam<string>;
-  projectFolderParam: InitializedParam<string>;
-  projectNameParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
   sampleStartParam: InitializedParam<number>;
@@ -29,8 +27,9 @@ type UsePluginMessagesOptions = {
   resamplePointsInputParam: InitializedParam<number>;
   resamplePointsPitchParam: InitializedParam<number>;
   setStatus: Dispatch<SetStateAction<string>>;
-  setCacheFolder: Dispatch<SetStateAction<string | null>>;
-  setFolderError: Dispatch<SetStateAction<string | null>>;
+  setEffectiveCacheDir: Dispatch<SetStateAction<string | null>>;
+  setCacheDirOverride: Dispatch<SetStateAction<string | null>>;
+  setCacheDirError: Dispatch<SetStateAction<string | null>>;
   setSampleError: Dispatch<SetStateAction<string | null>>;
   setSampleInfo: Dispatch<SetStateAction<SampleInfo | null>>;
   setResampleModal: Dispatch<SetStateAction<ResampleModalState | null>>;
@@ -52,8 +51,6 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       .onPluginMessage = (message) => {
       const {
         pluginVersionParam,
-        projectFolderParam,
-        projectNameParam,
         projectSampleRateParam,
         gainParam,
         sampleStartParam,
@@ -61,8 +58,9 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         resamplePointsInputParam,
         resamplePointsPitchParam,
         setStatus,
-        setCacheFolder,
-        setFolderError,
+        setEffectiveCacheDir,
+        setCacheDirOverride,
+        setCacheDirError,
         setSampleError,
         setSampleInfo,
         setResampleModal,
@@ -76,22 +74,14 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         if (typeof message.pluginVersion === "string") {
           pluginVersionParam.setFromPlugin(message.pluginVersion);
         }
-        if (message.projectFolder === null) {
-          projectFolderParam.setFromPlugin(null);
-        } else if (typeof message.projectFolder === "string") {
-          projectFolderParam.setFromPlugin(message.projectFolder);
-          setFolderError(null);
-          nextStatus = "Project folder set";
+        if (message.effectiveCacheDir === null) {
+          setEffectiveCacheDir(null);
+        } else if (typeof message.effectiveCacheDir === "string") {
+          setEffectiveCacheDir(message.effectiveCacheDir);
+          setCacheDirError(null);
         }
-        if (message.cachePath === null) {
-          setCacheFolder(null);
-        } else if (typeof message.cachePath === "string") {
-          setCacheFolder(message.cachePath);
-        }
-        if (message.projectName === null) {
-          projectNameParam.setFromPlugin(null);
-        } else if (typeof message.projectName === "string") {
-          projectNameParam.setFromPlugin(message.projectName);
+        if ("cacheDirOverride" in message) {
+          setCacheDirOverride(message.cacheDirOverride ?? null);
         }
         if (message.projectSampleRate === null) {
           projectSampleRateParam.setFromPlugin(null);
@@ -128,12 +118,12 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         setStatus(nextStatus);
       }
 
-      if (message.type === "ProjectFolderError") {
-        setFolderError(message.message);
-        setStatus("Project folder error");
+      if (message.type === "CacheDirError") {
+        setCacheDirError(message.message);
+        setStatus("Cache dir error");
       }
 
-      if (message.type === "ProjectFolderCanceled") {
+      if (message.type === "CacheDirCanceled") {
         setStatus("Folder picker canceled");
       }
 

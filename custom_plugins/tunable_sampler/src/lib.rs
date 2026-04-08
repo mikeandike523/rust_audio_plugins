@@ -8,14 +8,12 @@ use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use serde_json::json;
 use std::num::NonZeroU32;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::cache::{
-    build_project_state, cache_folder_from_params, ensure_cache_folder,
-    queue_folder_result, resolve_project_folder, sample_cache_exists,
-    send_cached_sample_if_available, save_sample_to_cache,
+    effective_cache_dir, get_sample_dir, new_unique_cache_key, queue_folder_result,
+    sample_cache_exists, sample_dir, send_cached_sample_if_available, save_sample_to_cache,
 };
 use crate::constants::{
     DEFAULT_RESAMPLE_POINTS, GUI_DEV_SERVER_URL, GUI_HEIGHT, GUI_PUBLISHED_URL, GUI_WIDTH,
@@ -40,13 +38,10 @@ pub struct TunableSampler {
 
 impl Default for TunableSampler {
     fn default() -> Self {
-        let pending_folder_result = Arc::new(Mutex::new(None));
-        let pending_folder_dirty = Arc::new(AtomicBool::new(false));
-
         Self {
             params: Arc::new(TunableSamplerParams::default()),
-            pending_folder_result,
-            pending_folder_dirty,
+            pending_folder_result: Arc::new(Mutex::new(None)),
+            pending_folder_dirty: Arc::new(AtomicBool::new(false)),
             sample_rate_hz: Arc::new(AtomicU32::new(0)),
             sample_rate_dirty: Arc::new(AtomicBool::new(false)),
             resample_points_input: Arc::new(AtomicU32::new(DEFAULT_RESAMPLE_POINTS)),
@@ -67,15 +62,14 @@ impl TunableSampler {
         resample_points_input: &Arc<AtomicU32>,
         resample_points_pitch: &Arc<AtomicU32>,
     ) {
-        let (project_folder, cache_folder, project_name) =
-            build_project_state(&params.project_folder);
+        let cache_dir_override = params.cache_dir.lock().ok().and_then(|g| g.clone());
+        let effective_dir = effective_cache_dir(&cache_dir_override);
 
         ctx.send_json(json!({
             "type": "State",
             "pluginVersion": env!("CARGO_PKG_VERSION"),
-            "projectFolder": project_folder,
-            "cachePath": cache_folder,
-            "projectName": project_name,
+            "effectiveCacheDir": effective_dir.to_string_lossy(),
+            "cacheDirOverride": cache_dir_override,
             "gain": params.gain.value(),
             "sampleStart": params.sample_start.value(),
             "sampleEnd": params.sample_end.value(),
@@ -84,6 +78,7 @@ impl TunableSampler {
             "resamplePointsPitch": resample_points_pitch.load(Ordering::Relaxed),
         }));
     }
+
     fn resolve_gui_url() -> &'static str {
         match std::thread::spawn(move || {
             use std::time::Duration;
@@ -98,7 +93,7 @@ impl TunableSampler {
         })
         .join()
         {
-            Ok(Ok(response)) => GUI_DEV_SERVER_URL,
+            Ok(Ok(_)) => GUI_DEV_SERVER_URL,
             _ => {
                 println!(
                     "Local dev server not available, using production URL: {}",
@@ -179,7 +174,8 @@ impl Plugin for TunableSampler {
         let resample_events_dirty = self.resample_events_dirty.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
-        let last_cache_folder: Mutex<Option<PathBuf>> = Mutex::new(None);
+        // Tracks which UUID we last sent a cached sample for, to avoid re-sending.
+        let last_sample_uuid: Mutex<Option<String>> = Mutex::new(None);
         let can_send_cached_sample = AtomicBool::new(false);
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
@@ -207,31 +203,21 @@ impl Plugin for TunableSampler {
                                     &resample_points_pitch,
                                 );
                             }
-                            Action::PickProjectFolder => {
-                                let project_folder = params.project_folder.clone();
+                            Action::PickCacheDir => {
+                                let cache_dir = params.cache_dir.clone();
                                 let pending_folder_result = pending_folder_result.clone();
                                 let pending_folder_dirty = pending_folder_dirty.clone();
                                 std::thread::spawn(move || {
-                                    let default_path =
-                                        project_folder.lock().ok().and_then(|guard| guard.clone());
+                                    let current =
+                                        cache_dir.lock().ok().and_then(|g| g.clone());
                                     let selection = tinyfiledialogs::select_folder_dialog(
-                                        "Select project folder",
-                                        default_path.as_deref().unwrap_or(""),
+                                        "Select cache folder",
+                                        current.as_deref().unwrap_or(""),
                                     );
                                     let result = match selection {
-                                        Some(path) => resolve_project_folder(
-                                            &project_folder,
-                                            path,
-                                        )
-                                        .map(|(folder, cache_folder)| {
-                                            FolderSelectionResult::Selected {
-                                                folder,
-                                                cache_folder,
-                                            }
-                                        })
-                                        .unwrap_or_else(|message| {
-                                            FolderSelectionResult::Error { message }
-                                        }),
+                                        Some(path) => FolderSelectionResult::Selected {
+                                            path: std::path::PathBuf::from(path),
+                                        },
                                         None => FolderSelectionResult::Canceled,
                                     };
                                     queue_folder_result(
@@ -241,31 +227,23 @@ impl Plugin for TunableSampler {
                                     );
                                 });
                             }
-                            Action::SetProjectFolder { path } => {
-                                let project_folder = params.project_folder.clone();
-                                let pending_folder_result = pending_folder_result.clone();
-                                let pending_folder_dirty = pending_folder_dirty.clone();
-                                std::thread::spawn(move || {
-                                    let result = resolve_project_folder(
-                                        &project_folder,
-                                        path,
-                                    );
-                                    queue_folder_result(
-                                        &pending_folder_result,
-                                        &pending_folder_dirty,
-                                        match result {
-                                            Ok((folder, cache_folder)) => {
-                                                FolderSelectionResult::Selected {
-                                                    folder,
-                                                    cache_folder,
-                                                }
-                                            }
-                                            Err(message) => {
-                                                FolderSelectionResult::Error { message }
-                                            }
-                                        },
-                                    );
-                                });
+                            Action::SetCacheDir { path } => {
+                                *params.cache_dir.lock().unwrap() = Some(path.clone());
+                                let effective = effective_cache_dir(&Some(path.clone()));
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "effectiveCacheDir": effective.to_string_lossy(),
+                                    "cacheDirOverride": path,
+                                }));
+                            }
+                            Action::ClearCacheDir => {
+                                *params.cache_dir.lock().unwrap() = None;
+                                let effective = effective_cache_dir(&None);
+                                ctx.send_json(json!({
+                                    "type": "State",
+                                    "effectiveCacheDir": effective.to_string_lossy(),
+                                    "cacheDirOverride": serde_json::Value::Null,
+                                }));
                             }
                             Action::SetGain { value } => {
                                 setter.begin_set_parameter(&params.gain);
@@ -311,33 +289,24 @@ impl Plugin for TunableSampler {
                                 frames,
                                 data_base64,
                             } => {
-                                let project_folder = params
-                                    .project_folder
-                                    .lock()
-                                    .ok()
-                                    .and_then(|guard| guard.clone());
-                                let Some(project_folder) = project_folder else {
-                                    ctx.send_json(json!({
-                                        "type": "SampleSaveError",
-                                        "message": "Project folder not set.",
-                                    }));
-                                    continue;
+                                let cache_dir_override =
+                                    params.cache_dir.lock().ok().and_then(|g| g.clone());
+                                let effective_dir = effective_cache_dir(&cache_dir_override);
+
+                                // Assign a UUID on first save; reuse on subsequent saves.
+                                let uuid = {
+                                    let mut uuid_guard = params.sample_uuid.lock().unwrap();
+                                    if uuid_guard.is_none() {
+                                        *uuid_guard =
+                                            Some(new_unique_cache_key(&effective_dir));
+                                    }
+                                    uuid_guard.clone().unwrap()
                                 };
 
-                                let cache_folder =
-                                    match ensure_cache_folder(&PathBuf::from(project_folder)) {
-                                        Ok(folder) => folder,
-                                        Err(message) => {
-                                            ctx.send_json(json!({
-                                                "type": "SampleSaveError",
-                                                "message": message,
-                                            }));
-                                            continue;
-                                        }
-                                    };
+                                let s_dir = sample_dir(&effective_dir, &uuid);
 
                                 match save_sample_to_cache(
-                                    &cache_folder,
+                                    &s_dir,
                                     &name,
                                     sample_rate,
                                     channels,
@@ -370,33 +339,35 @@ impl Plugin for TunableSampler {
                     if let Ok(mut guard) = pending_folder_result.lock() {
                         if let Some(result) = guard.take() {
                             match result {
-                                FolderSelectionResult::Selected {
-                                    folder,
-                                    cache_folder,
-                                } => {
-                                    let project_name = folder
-                                        .file_name()
-                                        .and_then(|name| name.to_str())
-                                        .map(|name| name.to_string());
+                                FolderSelectionResult::Selected { path } => {
+                                    let path_str = path.to_string_lossy().to_string();
+                                    *params.cache_dir.lock().unwrap() = Some(path_str.clone());
+                                    let effective =
+                                        effective_cache_dir(&Some(path_str.clone()));
                                     ctx.send_json(json!({
                                         "type": "State",
-                                        "projectFolder": folder.to_string_lossy(),
-                                        "cachePath": cache_folder.to_string_lossy(),
-                                        "projectName": project_name,
+                                        "effectiveCacheDir": effective.to_string_lossy(),
+                                        "cacheDirOverride": path_str,
                                     }));
-                                    if sample_cache_exists(&cache_folder) {
-                                        resample_requested.store(true, Ordering::Relaxed);
+                                    // If this instance already has a sample UUID, check if
+                                    // the data is present in the new cache dir.
+                                    if let Some(s_dir) =
+                                        get_sample_dir(&params.cache_dir, &params.sample_uuid)
+                                    {
+                                        if sample_cache_exists(&s_dir) {
+                                            resample_requested.store(true, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                                 FolderSelectionResult::Error { message } => {
                                     ctx.send_json(json!({
-                                        "type": "ProjectFolderError",
+                                        "type": "CacheDirError",
                                         "message": message,
                                     }));
                                 }
                                 FolderSelectionResult::Canceled => {
                                     ctx.send_json(json!({
-                                        "type": "ProjectFolderCanceled",
+                                        "type": "CacheDirCanceled",
                                     }));
                                 }
                             }
@@ -432,22 +403,24 @@ impl Plugin for TunableSampler {
                     }));
                 }
 
+                // Send cached sample to GUI when the plugin first connects or the UUID changes.
                 if can_send_cached_sample.load(Ordering::Relaxed) {
-                    if let Some(cache_folder) =
-                        cache_folder_from_params(&params.project_folder)
-                    {
-                        let mut should_check = true;
-                        if let Ok(mut guard) = last_cache_folder.lock() {
-                            should_check = guard
-                                .as_ref()
-                                .map(|previous| previous != &cache_folder)
-                                .unwrap_or(true);
-                            if should_check {
-                                *guard = Some(cache_folder.clone());
-                            }
+                    let current_uuid =
+                        params.sample_uuid.lock().ok().and_then(|g| g.clone());
+                    let mut should_check = false;
+                    if let Ok(mut guard) = last_sample_uuid.lock() {
+                        if guard.as_ref() != current_uuid.as_ref() {
+                            should_check = true;
+                            *guard = current_uuid.clone();
                         }
-                        if should_check {
-                            match send_cached_sample_if_available(ctx, &cache_folder) {
+                    }
+                    if should_check {
+                        if let Some(uuid) = current_uuid {
+                            let cache_dir_override =
+                                params.cache_dir.lock().ok().and_then(|g| g.clone());
+                            let effective_dir = effective_cache_dir(&cache_dir_override);
+                            let s_dir = sample_dir(&effective_dir, &uuid);
+                            match send_cached_sample_if_available(ctx, &s_dir) {
                                 Ok(found) => {
                                     if found {
                                         resample_requested.store(true, Ordering::Relaxed);
@@ -503,15 +476,15 @@ impl Plugin for TunableSampler {
                 if resample_requested.load(Ordering::Relaxed)
                     && !resample_in_progress.load(Ordering::Relaxed)
                 {
-                    if let Some(cache_folder) =
-                        cache_folder_from_params(&params.project_folder)
+                    if let Some(s_dir) =
+                        get_sample_dir(&params.cache_dir, &params.sample_uuid)
                     {
                         let target_rate = sample_rate_hz.load(Ordering::Relaxed);
-                        if target_rate > 0 && sample_cache_exists(&cache_folder) {
+                        if target_rate > 0 && sample_cache_exists(&s_dir) {
                             resample_requested.store(false, Ordering::Relaxed);
                             resample_in_progress.store(true, Ordering::Relaxed);
                             spawn_resample_task(
-                                cache_folder,
+                                s_dir,
                                 target_rate,
                                 resample_points_input.load(Ordering::Relaxed),
                                 resample_in_progress.clone(),

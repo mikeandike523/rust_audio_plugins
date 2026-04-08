@@ -14,3 +14,4 @@ nih_plug_webview = { path = "../../nih-plug-webview" }
 ureq = "2.10.1"
 tinyfiledialogs = "3.9.1"
 base64 = "0.22.1"
+directories = "6.0.0"

@@ -2,9 +2,8 @@ export type PluginMessage =
   | {
       type: "State";
       pluginVersion?: string | null;
-      projectFolder?: string | null;
-      cachePath?: string | null;
-      projectName?: string | null;
+      effectiveCacheDir?: string | null;
+      cacheDirOverride?: string | null;
       projectSampleRate?: number | null;
       resamplePointsInput?: number | null;
       resamplePointsPitch?: number | null;
@@ -13,11 +12,11 @@ export type PluginMessage =
       gain?: number | null;
     }
   | {
-      type: "ProjectFolderError";
+      type: "CacheDirError";
       message: string;
     }
   | {
-      type: "ProjectFolderCanceled";
+      type: "CacheDirCanceled";
     }
   | {
       type: "SampleSaved";

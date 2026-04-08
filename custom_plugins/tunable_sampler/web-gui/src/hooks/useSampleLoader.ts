@@ -5,7 +5,6 @@ import { arrayBufferToBase64 } from "../utils/audio";
 import type { SampleInfo } from "../types/appTypes";
 
 type UseSampleLoaderOptions = {
-  cacheFolder: string | null;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
   getAudioContext: () => AudioContext;
   onSampleInfo: (info: SampleInfo) => void;
@@ -14,7 +13,6 @@ type UseSampleLoaderOptions = {
 };
 
 export const useSampleLoader = ({
-  cacheFolder,
   audioBufferRef,
   getAudioContext,
   onSampleInfo,
@@ -25,12 +23,6 @@ export const useSampleLoader = ({
 
   const handleAudioFile = useCallback(
     async (file: File) => {
-      if (!cacheFolder) {
-        onSampleError("Select a project folder before loading audio.");
-        onStatus("Project folder required");
-        return;
-      }
-
       onSampleError(null);
       setIsDecoding(true);
       onStatus(`Decoding ${file.name}...`);
@@ -81,14 +73,7 @@ export const useSampleLoader = ({
         setIsDecoding(false);
       }
     },
-    [
-      audioBufferRef,
-      cacheFolder,
-      getAudioContext,
-      onSampleError,
-      onSampleInfo,
-      onStatus,
-    ],
+    [audioBufferRef, getAudioContext, onSampleError, onSampleInfo, onStatus],
   );
 
   return { handleAudioFile, isDecoding };

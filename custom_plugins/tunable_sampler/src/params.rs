@@ -13,8 +13,13 @@ pub struct TunableSamplerParams {
     #[id = "sample_end"]
     pub sample_end: FloatParam,
     pub sample_end_changed: Arc<AtomicBool>,
-    #[persist = "project_folder"]
-    pub project_folder: Arc<Mutex<Option<String>>>,
+    /// Optional custom cache directory override. None = use platform default.
+    #[persist = "cache_dir"]
+    pub cache_dir: Arc<Mutex<Option<String>>>,
+    /// Unique ID for this instance's sample data subfolder inside the cache dir.
+    /// None = no sample has been loaded yet.
+    #[persist = "sample_uuid"]
+    pub sample_uuid: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for TunableSamplerParams {
@@ -65,7 +70,8 @@ impl Default for TunableSamplerParams {
             .with_step_size(0.001)
             .with_callback(sample_end_callback),
             sample_end_changed,
-            project_folder: Arc::new(Mutex::new(None)),
+            cache_dir: Arc::new(Mutex::new(None)),
+            sample_uuid: Arc::new(Mutex::new(None)),
         }
     }
 }
