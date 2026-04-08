@@ -34,6 +34,10 @@ type UsePluginMessagesOptions = {
   setSampleInfo: Dispatch<SetStateAction<SampleInfo | null>>;
   setResampleModal: Dispatch<SetStateAction<ResampleModalState | null>>;
   setResampleFading: Dispatch<SetStateAction<boolean>>;
+  setPitchHz: Dispatch<SetStateAction<number | null>>;
+  setPitchLoading: Dispatch<SetStateAction<boolean>>;
+  onSampleSaved: () => void;
+  onCachedSampleLoaded: () => void;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
   getAudioContext: () => AudioContext;
 };
@@ -65,6 +69,10 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         setSampleInfo,
         setResampleModal,
         setResampleFading,
+        setPitchHz,
+        setPitchLoading,
+        onSampleSaved,
+        onCachedSampleLoaded,
         audioBufferRef,
         getAudioContext,
       } = optionsRef.current;
@@ -130,6 +138,7 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       if (message.type === "SampleSaved") {
         setSampleError(null);
         setStatus(`Sample cached${message.name ? `: ${message.name}` : ""}`);
+        onSampleSaved();
       }
 
       if (message.type === "SampleSaveError") {
@@ -174,6 +183,7 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
           setStatus(
             `Sample loaded from cache${message.name ? `: ${message.name}` : ""}`,
           );
+          onCachedSampleLoaded();
         } catch (err) {
           const errorMessage =
             err instanceof Error
@@ -246,6 +256,24 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
           setResampleModal(null);
           resampleTimeoutRef.current = null;
         }, 1600);
+      }
+
+      if (message.type === "PitchEstimating") {
+        setPitchLoading(true);
+      }
+
+      if (message.type === "PitchDetected") {
+        setPitchHz(message.hz);
+        setPitchLoading(false);
+      }
+
+      if (message.type === "PitchNoResult") {
+        setPitchHz(null);
+        setPitchLoading(false);
+      }
+
+      if (message.type === "PitchEstimateError") {
+        setPitchLoading(false);
       }
     };
 

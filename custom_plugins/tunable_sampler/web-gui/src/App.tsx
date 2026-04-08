@@ -6,10 +6,10 @@ import { usePluginMessages } from "./hooks/usePluginMessages";
 import { useSampleLoader } from "./hooks/useSampleLoader";
 import { useWaveformCanvas } from "./hooks/useWaveformCanvas";
 import { clamp } from "./utils/audio";
+import { hzToNoteInfo, formatPitchReadout } from "./utils/pitch";
 import type { ResampleModalState, SampleInfo } from "./types/appTypes";
 import { Controls } from "./components/Controls";
 import { Footer } from "./components/Footer";
-import { ProjectCard } from "./components/ProjectCard";
 import { ResampleModal } from "./components/ResampleModal";
 import { SampleDrop } from "./components/SampleDrop";
 
@@ -20,9 +20,10 @@ export default function App() {
   const [cacheDirError, setCacheDirError] = useState<string | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [sampleInfo, setSampleInfo] = useState<SampleInfo | null>(null);
-  const [resampleModal, setResampleModal] =
-    useState<ResampleModalState | null>(null);
+  const [resampleModal, setResampleModal] = useState<ResampleModalState | null>(null);
   const [resampleFading, setResampleFading] = useState(false);
+  const [pitchHz, setPitchHz] = useState<number | null>(null);
+  const [pitchLoading, setPitchLoading] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
@@ -44,8 +45,6 @@ export default function App() {
     pollMs: null,
   });
 
-  // Stable sendPayload factories — must not be inline arrow fns or they recreate
-  // setValue on every render, which destabilises throttled drag handlers.
   const gainSendPayload = useCallback(
     (value: number) => ({ type: "SetGain", value }),
     [],
@@ -113,6 +112,30 @@ export default function App() {
     return audioContextRef.current;
   }, []);
 
+  const handleRecalcPitch = useCallback(() => {
+    sendToPluginSafe({
+      type: "RequestPitchEstimate",
+      sample_start: sampleStartParam.value ?? 0,
+    });
+    setPitchLoading(true);
+  }, [sampleStartParam.value]);
+
+  const onSampleSaved = useCallback(() => {
+    // Auto-estimate pitch from position 0 on each new sample save.
+    // Start handle resets to 0 via the sampleInfo effect below.
+    sendToPluginSafe({ type: "RequestPitchEstimate", sample_start: 0 });
+    setPitchLoading(true);
+    setPitchHz(null);
+  }, []);
+
+  const onCachedSampleLoaded = useCallback(() => {
+    sendToPluginSafe({
+      type: "RequestPitchEstimate",
+      sample_start: sampleStartParam.value ?? 0,
+    });
+    setPitchLoading(true);
+  }, [sampleStartParam.value]);
+
   usePluginMessages({
     pluginVersionParam,
     projectSampleRateParam,
@@ -129,6 +152,10 @@ export default function App() {
     setSampleInfo,
     setResampleModal,
     setResampleFading,
+    setPitchHz,
+    setPitchLoading,
+    onSampleSaved,
+    onCachedSampleLoaded,
     audioBufferRef,
     getAudioContext,
   });
@@ -143,18 +170,10 @@ export default function App() {
     resamplePointsPitchParam.ready;
 
   useEffect(() => {
-    if (allParamsReady) {
-      return;
-    }
-
+    if (allParamsReady) return;
     sendToPluginSafe(requestStatePayload);
-    const intervalId = window.setInterval(() => {
-      sendToPluginSafe(requestStatePayload);
-    }, 200);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    const id = window.setInterval(() => sendToPluginSafe(requestStatePayload), 200);
+    return () => window.clearInterval(id);
   }, [allParamsReady, requestStatePayload]);
 
   useWaveformCanvas({
@@ -182,51 +201,27 @@ export default function App() {
     sendToPluginSafe({ type: "ClearCacheDir" });
   };
 
-  const handleGainChange = (value: number) => {
-    const clamped = clamp(value, -24, 24);
-    gainParam.setValue(clamped);
-  };
+  const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
 
-  // Destructure stable setValue references so callbacks don't depend on the
-  // whole param object (which is a new object reference on every render).
   const { setValue: setSampleStart } = sampleStartParam;
   const { setValue: setSampleEnd } = sampleEndParam;
 
   const handleSampleStartChange = useCallback(
-    (value: number) => {
-      setSampleStart(clamp(value, 0, 1));
-    },
+    (value: number) => setSampleStart(clamp(value, 0, 1)),
     [setSampleStart],
   );
-
   const handleSampleEndChange = useCallback(
-    (value: number) => {
-      setSampleEnd(clamp(value, 0, 1));
-    },
+    (value: number) => setSampleEnd(clamp(value, 0, 1)),
     [setSampleEnd],
   );
 
-  const handleResamplePointsInputChange = (value: number) => {
-    if (!Number.isNaN(value)) {
-      resamplePointsInputParam.setValue(value);
-    }
-  };
-
-  const handleResamplePointsPitchChange = (value: number) => {
-    if (!Number.isNaN(value)) {
-      resamplePointsPitchParam.setValue(value);
-    }
-  };
-
-  const handleFileSelected = (file: File) => {
-    void handleAudioFile(file);
-  };
-
+  const handleFileSelected = (file: File) => void handleAudioFile(file);
   const handleFileRejected = (message: string, statusText: string) => {
     setSampleError(message);
     setStatus(statusText);
   };
 
+  // Reset handles to full range when a new sample is loaded.
   useEffect(() => {
     if (!sampleInfo) {
       setSampleStart(0);
@@ -237,48 +232,98 @@ export default function App() {
     setSampleEnd(1);
   }, [sampleInfo, setSampleStart, setSampleEnd]);
 
+  const isCustomDir = cacheDirOverride !== null;
+  const pitchNote = pitchHz !== null ? hzToNoteInfo(pitchHz) : null;
+
   return (
     <div className="panel">
       <header className="top-bar">
-        <div>
+        <div className="top-bar-title">
           <h1>Tunable Sampler</h1>
           <div className="subtitle">Instrument Setup</div>
         </div>
         <div className="status-chip">{status}</div>
       </header>
 
-      <section className="workspace">
-        <ProjectCard
-          effectiveCacheDir={effectiveCacheDir}
-          cacheDirOverride={cacheDirOverride}
-          projectSampleRate={projectSampleRateParam.value}
-          cacheDirError={cacheDirError}
-          onPickCacheDir={handlePickCacheDir}
-          onClearCacheDir={handleClearCacheDir}
-        />
+      <SampleDrop
+        sampleInfo={sampleInfo}
+        sampleError={sampleError}
+        isDecoding={isDecoding}
+        onFileSelected={handleFileSelected}
+        onFileRejected={handleFileRejected}
+        sampleStart={sampleStartParam.value}
+        sampleEnd={sampleEndParam.value}
+        onSampleStartChange={handleSampleStartChange}
+        onSampleEndChange={handleSampleEndChange}
+        waveformContainerRef={waveformContainerRef}
+        waveformCanvasRef={waveformCanvasRef}
+      />
 
-        <SampleDrop
-          sampleInfo={sampleInfo}
-          sampleError={sampleError}
-          isDecoding={isDecoding}
-          onFileSelected={handleFileSelected}
-          onFileRejected={handleFileRejected}
-          sampleStart={sampleStartParam.value}
-          sampleEnd={sampleEndParam.value}
-          onSampleStartChange={handleSampleStartChange}
-          onSampleEndChange={handleSampleEndChange}
-          waveformContainerRef={waveformContainerRef}
-          waveformCanvasRef={waveformCanvasRef}
-        />
-      </section>
+      <div className="info-strip">
+        {/* Cache dir */}
+        <div className="info-block">
+          <div className="section-label">Cache{isCustomDir ? " · custom" : ""}</div>
+          <div className="info-path" title={effectiveCacheDir ?? undefined}>
+            {effectiveCacheDir ?? "Resolving…"}
+          </div>
+          <div className="info-meta">
+            Host rate: {projectSampleRateParam.value !== null ? `${projectSampleRateParam.value} Hz` : "—"}
+          </div>
+          {cacheDirError && <div className="info-error">{cacheDirError}</div>}
+          <div className="info-actions">
+            <button className="mini-button" type="button" onClick={handlePickCacheDir}>
+              {isCustomDir ? "Change" : "Set Custom"}
+            </button>
+            {isCustomDir && (
+              <button className="mini-button" type="button" onClick={handleClearCacheDir}>
+                Default
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Sample meta */}
+        <div className="info-block">
+          <div className="section-label">Sample</div>
+          <div className="info-name">{sampleInfo?.name ?? "No sample loaded"}</div>
+          {sampleInfo && (
+            <div className="info-meta">
+              {sampleInfo.channels}ch · {Math.round(sampleInfo.sampleRate)} Hz · {sampleInfo.duration.toFixed(2)}s
+            </div>
+          )}
+          {sampleError && <div className="info-error">{sampleError}</div>}
+        </div>
+
+        {/* Pitch */}
+        <div className="info-block">
+          <div className="section-label">Pitch @ Start</div>
+          <div className="pitch-readout">
+            {pitchLoading
+              ? "Estimating…"
+              : pitchNote !== null
+                ? formatPitchReadout(pitchNote)
+                : "—"}
+          </div>
+          {sampleInfo && (
+            <button
+              className="mini-button"
+              type="button"
+              onClick={handleRecalcPitch}
+              disabled={pitchLoading}
+            >
+              Recalculate Pitch@Start
+            </button>
+          )}
+        </div>
+      </div>
 
       <Controls
         gain={gainParam.value}
         onGainChange={handleGainChange}
         resamplePointsInput={resamplePointsInputParam.value}
         resamplePointsPitch={resamplePointsPitchParam.value}
-        onResamplePointsInputChange={handleResamplePointsInputChange}
-        onResamplePointsPitchChange={handleResamplePointsPitchChange}
+        onResamplePointsInputChange={(v) => { if (!Number.isNaN(v)) resamplePointsInputParam.setValue(v); }}
+        onResamplePointsPitchChange={(v) => { if (!Number.isNaN(v)) resamplePointsPitchParam.setValue(v); }}
       />
 
       <Footer
@@ -287,10 +332,7 @@ export default function App() {
         loadedFrom={loadedFrom}
       />
 
-      <ResampleModal
-        resampleModal={resampleModal}
-        resampleFading={resampleFading}
-      />
+      <ResampleModal resampleModal={resampleModal} resampleFading={resampleFading} />
     </div>
   );
 }

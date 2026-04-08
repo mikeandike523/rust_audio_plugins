@@ -1,6 +1,7 @@
 mod cache;
 mod constants;
 mod params;
+mod pitch;
 mod resample;
 mod types;
 
@@ -19,8 +20,9 @@ use crate::constants::{
     DEFAULT_RESAMPLE_POINTS, GUI_DEV_SERVER_URL, GUI_HEIGHT, GUI_PUBLISHED_URL, GUI_WIDTH,
 };
 use crate::params::TunableSamplerParams;
+use crate::pitch::spawn_pitch_estimate;
 use crate::resample::spawn_resample_task;
-use crate::types::{Action, FolderSelectionResult, ResampleEvent};
+use crate::types::{Action, FolderSelectionResult, PitchEvent, ResampleEvent};
 
 pub struct TunableSampler {
     params: Arc<TunableSamplerParams>,
@@ -34,6 +36,9 @@ pub struct TunableSampler {
     resample_in_progress: Arc<AtomicBool>,
     resample_events: Arc<Mutex<Vec<ResampleEvent>>>,
     resample_events_dirty: Arc<AtomicBool>,
+    pitch_in_progress: Arc<AtomicBool>,
+    pitch_events: Arc<Mutex<Vec<PitchEvent>>>,
+    pitch_events_dirty: Arc<AtomicBool>,
 }
 
 impl Default for TunableSampler {
@@ -50,6 +55,9 @@ impl Default for TunableSampler {
             resample_in_progress: Arc::new(AtomicBool::new(false)),
             resample_events: Arc::new(Mutex::new(Vec::new())),
             resample_events_dirty: Arc::new(AtomicBool::new(false)),
+            pitch_in_progress: Arc::new(AtomicBool::new(false)),
+            pitch_events: Arc::new(Mutex::new(Vec::new())),
+            pitch_events_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -172,6 +180,9 @@ impl Plugin for TunableSampler {
         let resample_in_progress = self.resample_in_progress.clone();
         let resample_events = self.resample_events.clone();
         let resample_events_dirty = self.resample_events_dirty.clone();
+        let pitch_in_progress = self.pitch_in_progress.clone();
+        let pitch_events = self.pitch_events.clone();
+        let pitch_events_dirty = self.pitch_events_dirty.clone();
 
         let source = HTMLSource::URL(Self::resolve_gui_url());
         // Tracks which UUID we last sent a cached sample for, to avoid re-sending.
@@ -281,6 +292,23 @@ impl Plugin for TunableSampler {
                                     "type": "State",
                                     "resamplePointsPitch": points,
                                 }));
+                            }
+                            Action::RequestPitchEstimate { sample_start } => {
+                                if !pitch_in_progress.load(Ordering::Relaxed) {
+                                    if let Some(s_dir) = get_sample_dir(&params.cache_dir, &params.sample_uuid) {
+                                        if sample_cache_exists(&s_dir) {
+                                            pitch_in_progress.store(true, Ordering::Relaxed);
+                                            ctx.send_json(json!({ "type": "PitchEstimating" }));
+                                            spawn_pitch_estimate(
+                                                s_dir,
+                                                sample_start,
+                                                pitch_in_progress.clone(),
+                                                pitch_events.clone(),
+                                                pitch_events_dirty.clone(),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             Action::SaveSample {
                                 name,
@@ -465,6 +493,32 @@ impl Plugin for TunableSampler {
                                 ResampleEvent::Error { message } => {
                                     ctx.send_json(json!({
                                         "type": "ResampleError",
+                                        "message": message,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if pitch_events_dirty.swap(false, Ordering::Relaxed) {
+                    if let Ok(mut guard) = pitch_events.lock() {
+                        let events: Vec<PitchEvent> = guard.drain(..).collect();
+                        drop(guard);
+                        for event in events {
+                            match event {
+                                PitchEvent::Detected { hz } => {
+                                    ctx.send_json(json!({
+                                        "type": "PitchDetected",
+                                        "hz": hz,
+                                    }));
+                                }
+                                PitchEvent::NoResult => {
+                                    ctx.send_json(json!({ "type": "PitchNoResult" }));
+                                }
+                                PitchEvent::Error { message } => {
+                                    ctx.send_json(json!({
+                                        "type": "PitchEstimateError",
                                         "message": message,
                                     }));
                                 }

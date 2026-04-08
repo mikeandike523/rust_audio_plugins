@@ -21,6 +21,7 @@ pub enum Action {
         frames: u32,
         data_base64: String,
     },
+    RequestPitchEstimate { sample_start: f32 },
 }
 
 #[derive(Deserialize)]
@@ -54,6 +55,12 @@ pub enum ResampleEvent {
     Started { label: String },
     Progress { progress: f32 },
     Completed { message: String },
+    Error { message: String },
+}
+
+pub enum PitchEvent {
+    Detected { hz: f64 },
+    NoResult,
     Error { message: String },
 }
 

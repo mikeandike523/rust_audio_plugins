@@ -54,7 +54,11 @@ export type PluginMessage =
   | {
       type: "ResampleError";
       message: string;
-    };
+    }
+  | { type: "PitchEstimating" }
+  | { type: "PitchDetected"; hz: number }
+  | { type: "PitchNoResult" }
+  | { type: "PitchEstimateError"; message: string };
 
 export type SampleInfo = {
   name: string;
