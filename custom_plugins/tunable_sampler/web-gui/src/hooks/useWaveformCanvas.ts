@@ -34,14 +34,50 @@ export const useWaveformCanvas = ({
       drawWaveform(canvas, audioBufferRef.current);
     };
 
+    let raf1 = 0;
+    let raf2 = 0;
+    let timeout1 = 0;
+    let timeout2 = 0;
+    let timeout3 = 0;
+
+    const scheduleRedrawBurst = () => {
+      resize();
+      raf1 = window.requestAnimationFrame(() => {
+        resize();
+        raf2 = window.requestAnimationFrame(resize);
+      });
+      timeout1 = window.setTimeout(resize, 0);
+      timeout2 = window.setTimeout(resize, 60);
+      timeout3 = window.setTimeout(resize, 180);
+    };
+
     resize();
+    scheduleRedrawBurst();
     const observer = new ResizeObserver(resize);
     observer.observe(container);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        scheduleRedrawBurst();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+      window.clearTimeout(timeout1);
+      window.clearTimeout(timeout2);
+      window.clearTimeout(timeout3);
+    };
   }, [audioBufferRef, canvasRef, containerRef]);
 
   useEffect(() => {
     drawWaveform(canvasRef.current, audioBufferRef.current);
+    const timeoutId = window.setTimeout(() => {
+      drawWaveform(canvasRef.current, audioBufferRef.current);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [audioBufferRef, canvasRef, sampleInfo]);
 };

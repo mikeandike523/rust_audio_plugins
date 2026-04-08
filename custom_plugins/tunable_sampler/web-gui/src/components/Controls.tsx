@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { TuningStatus } from "../types/appTypes";
 import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
@@ -59,7 +60,11 @@ export const Controls = ({
   onKbmFileChange,
   onClearSclFile,
   onClearKbmFile,
-}: ControlsProps) => (
+}: ControlsProps) => {
+  const sclInputRef = useRef<HTMLInputElement | null>(null);
+  const kbmInputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
   <section className="controls">
     <div className="control">
       <label htmlFor="gain">Gain</label>
@@ -233,15 +238,47 @@ export const Controls = ({
     <div className="control tuning-control">
       <label>Tuning</label>
       <div className="tuning-row">
-        <input type="file" accept=".scl" onChange={(e) => onSclFileChange(e.target.files?.[0] ?? null)} />
+        <input
+          ref={sclInputRef}
+          className="hidden-file-input"
+          type="file"
+          accept=".scl"
+          onChange={(e) => {
+            onSclFileChange(e.target.files?.[0] ?? null);
+            e.target.value = "";
+          }}
+        />
+        <button
+          className="file-trigger"
+          type="button"
+          onClick={() => sclInputRef.current?.click()}
+        >
+          Choose SCL
+        </button>
         <button className="mini-button" type="button" onClick={onClearSclFile}>Clear SCL</button>
       </div>
-      <div className="control-meta">{tuningStatus?.scl_name ? `SCL: ${tuningStatus.scl_name}` : "No SCL loaded"}</div>
+      <div className="file-status">{tuningStatus?.scl_name ? tuningStatus.scl_name : "No SCL loaded"}</div>
       <div className="tuning-row">
-        <input type="file" accept=".kbm" onChange={(e) => onKbmFileChange(e.target.files?.[0] ?? null)} />
+        <input
+          ref={kbmInputRef}
+          className="hidden-file-input"
+          type="file"
+          accept=".kbm"
+          onChange={(e) => {
+            onKbmFileChange(e.target.files?.[0] ?? null);
+            e.target.value = "";
+          }}
+        />
+        <button
+          className="file-trigger"
+          type="button"
+          onClick={() => kbmInputRef.current?.click()}
+        >
+          Choose KBM
+        </button>
         <button className="mini-button" type="button" onClick={onClearKbmFile}>Clear KBM</button>
       </div>
-      <div className="control-meta">{tuningStatus?.kbm_name ? `KBM: ${tuningStatus.kbm_name}` : "No KBM loaded"}</div>
+      <div className="file-status">{tuningStatus?.kbm_name ? tuningStatus.kbm_name : "No KBM loaded"}</div>
       <div className={`control-meta${tuningStatus?.error ? " control-meta-error" : ""}`}>
         {tuningStatus?.error
           ? tuningStatus.error
@@ -251,4 +288,5 @@ export const Controls = ({
       </div>
     </div>
   </section>
-);
+  );
+};
