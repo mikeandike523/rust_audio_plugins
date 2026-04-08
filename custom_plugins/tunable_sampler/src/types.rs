@@ -24,6 +24,17 @@ pub enum Action {
     },
     RequestPitchEstimate { sample_start: f32 },
     SetDetune { value: f32 },
+    SetPolyphony { voices: u32 },
+    SetAttack { value: f32 },
+    SetDecay { value: f32 },
+    SetSustain { value: f32 },
+    SetRelease { value: f32 },
+    SetBendDepth { value: f32 },
+    SetNudgeTo12Edo { enabled: bool },
+    SetSclFile { name: String, contents: String },
+    SetKbmFile { name: String, contents: String },
+    ClearSclFile,
+    ClearKbmFile,
 }
 
 #[derive(Deserialize)]

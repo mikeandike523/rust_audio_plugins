@@ -241,3 +241,37 @@ pub fn load_resampled_metadata(sample_dir: &Path) -> Result<Option<ResampledMeta
         .map_err(|err| format!("Failed to parse resampled.json: {err}"))?;
     Ok(Some(metadata))
 }
+
+pub fn load_resampled_data(sample_dir: &Path) -> Result<(ResampledMetadata, Vec<f32>), String> {
+    let array_path = sample_dir.join("resampled.array");
+    let json_path = sample_dir.join("resampled.json");
+    if !(array_path.is_file() && json_path.is_file()) {
+        return Err("Resampled cache is missing.".to_string());
+    }
+
+    let metadata_bytes = std::fs::read(&json_path)
+        .map_err(|err| format!("Failed to read resampled.json: {err}"))?;
+    let metadata: ResampledMetadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|err| format!("Failed to parse resampled.json: {err}"))?;
+
+    if metadata.sample_rate == 0 {
+        return Err("Resampled sample rate cannot be zero.".to_string());
+    }
+
+    let data_bytes = std::fs::read(&array_path)
+        .map_err(|err| format!("Failed to read resampled.array: {err}"))?;
+    let expected_len = metadata.frames as usize * metadata.channels as usize * 4;
+    if data_bytes.len() != expected_len {
+        return Err(format!(
+            "Resampled cache size mismatch (expected {expected_len} bytes, got {}).",
+            data_bytes.len()
+        ));
+    }
+
+    let mut data = Vec::with_capacity(data_bytes.len() / 4);
+    for chunk in data_bytes.chunks_exact(4) {
+        data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    Ok((metadata, data))
+}

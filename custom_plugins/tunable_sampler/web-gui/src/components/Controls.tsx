@@ -1,3 +1,4 @@
+import type { TuningStatus } from "../types/appTypes";
 import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
 type ControlsProps = {
@@ -6,11 +7,28 @@ type ControlsProps = {
   detune: number | null;
   onDetuneChange: (value: number) => void;
   onDetuneReset: () => void;
+  attack: number | null;
+  onAttackChange: (value: number) => void;
+  decay: number | null;
+  onDecayChange: (value: number) => void;
+  sustain: number | null;
+  onSustainChange: (value: number) => void;
+  release: number | null;
+  onReleaseChange: (value: number) => void;
+  bendDepth: number | null;
+  onBendDepthChange: (value: number) => void;
+  polyphony: number | null;
+  onPolyphonyChange: (value: number) => void;
   resampleQualityInput: number | null;
   resampleQualityPitch: number | null;
   onResampleQualityInputChange: (value: number) => void;
   onResampleQualityPitchChange: (value: number) => void;
   onForceResample: () => void;
+  tuningStatus: TuningStatus | null;
+  onSclFileChange: (file: File | null) => void;
+  onKbmFileChange: (file: File | null) => void;
+  onClearSclFile: () => void;
+  onClearKbmFile: () => void;
 };
 
 export const Controls = ({
@@ -19,11 +37,28 @@ export const Controls = ({
   detune,
   onDetuneChange,
   onDetuneReset,
+  attack,
+  onAttackChange,
+  decay,
+  onDecayChange,
+  sustain,
+  onSustainChange,
+  release,
+  onReleaseChange,
+  bendDepth,
+  onBendDepthChange,
+  polyphony,
+  onPolyphonyChange,
   resampleQualityInput,
   resampleQualityPitch,
   onResampleQualityInputChange,
   onResampleQualityPitchChange,
   onForceResample,
+  tuningStatus,
+  onSclFileChange,
+  onKbmFileChange,
+  onClearSclFile,
+  onClearKbmFile,
 }: ControlsProps) => (
   <section className="controls">
     <div className="control">
@@ -46,7 +81,6 @@ export const Controls = ({
     <div className="control">
       <label htmlFor="detune">Detune</label>
       <div className="control-row">
-        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
         <div onDoubleClick={onDetuneReset} title="Double-click to reset">
           <input
             id="detune"
@@ -60,6 +94,108 @@ export const Controls = ({
           />
         </div>
         <span className="value">{detune === null ? "—" : `${detune >= 0 ? "+" : ""}${detune.toFixed(1)}¢`}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="bend-depth">Bend Depth</label>
+      <div className="control-row">
+        <input
+          id="bend-depth"
+          type="range"
+          min="100"
+          max="400"
+          step="1"
+          value={bendDepth ?? 200}
+          onChange={(e) => onBendDepthChange(Number(e.target.value))}
+          disabled={bendDepth === null}
+        />
+        <span className="value">{bendDepth === null ? "—" : `${Math.round(bendDepth)}¢`}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label>Polyphony</label>
+      <div className="radio-row">
+        {[16, 24, 32].map((voices) => (
+          <label key={voices} className="radio-chip">
+            <input
+              type="radio"
+              name="polyphony"
+              checked={polyphony === voices}
+              onChange={() => onPolyphonyChange(voices)}
+            />
+            <span>{voices}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="attack">Attack</label>
+      <div className="control-row">
+        <input
+          id="attack"
+          type="range"
+          min="0"
+          max="5"
+          step="0.001"
+          value={attack ?? 0.01}
+          onChange={(e) => onAttackChange(Number(e.target.value))}
+          disabled={attack === null}
+        />
+        <span className="value">{attack === null ? "—" : `${attack.toFixed(3)} s`}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="decay">Decay</label>
+      <div className="control-row">
+        <input
+          id="decay"
+          type="range"
+          min="0"
+          max="5"
+          step="0.001"
+          value={decay ?? 0.1}
+          onChange={(e) => onDecayChange(Number(e.target.value))}
+          disabled={decay === null}
+        />
+        <span className="value">{decay === null ? "—" : `${decay.toFixed(3)} s`}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="sustain">Sustain</label>
+      <div className="control-row">
+        <input
+          id="sustain"
+          type="range"
+          min="0"
+          max="1"
+          step="0.001"
+          value={sustain ?? 1}
+          onChange={(e) => onSustainChange(Number(e.target.value))}
+          disabled={sustain === null}
+        />
+        <span className="value">{sustain === null ? "—" : sustain.toFixed(3)}</span>
+      </div>
+    </div>
+
+    <div className="control">
+      <label htmlFor="release">Release</label>
+      <div className="control-row">
+        <input
+          id="release"
+          type="range"
+          min="0"
+          max="10"
+          step="0.001"
+          value={release ?? 0.25}
+          onChange={(e) => onReleaseChange(Number(e.target.value))}
+          disabled={release === null}
+        />
+        <span className="value">{release === null ? "—" : `${release.toFixed(3)} s`}</span>
       </div>
     </div>
 
@@ -92,6 +228,27 @@ export const Controls = ({
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+    </div>
+
+    <div className="control tuning-control">
+      <label>Tuning</label>
+      <div className="tuning-row">
+        <input type="file" accept=".scl" onChange={(e) => onSclFileChange(e.target.files?.[0] ?? null)} />
+        <button className="mini-button" type="button" onClick={onClearSclFile}>Clear SCL</button>
+      </div>
+      <div className="control-meta">{tuningStatus?.scl_name ? `SCL: ${tuningStatus.scl_name}` : "No SCL loaded"}</div>
+      <div className="tuning-row">
+        <input type="file" accept=".kbm" onChange={(e) => onKbmFileChange(e.target.files?.[0] ?? null)} />
+        <button className="mini-button" type="button" onClick={onClearKbmFile}>Clear KBM</button>
+      </div>
+      <div className="control-meta">{tuningStatus?.kbm_name ? `KBM: ${tuningStatus.kbm_name}` : "No KBM loaded"}</div>
+      <div className={`control-meta${tuningStatus?.error ? " control-meta-error" : ""}`}>
+        {tuningStatus?.error
+          ? tuningStatus.error
+          : tuningStatus?.active
+            ? "Tuning active"
+            : "Using default 12-EDO"}
+      </div>
     </div>
   </section>
 );

@@ -10,6 +10,7 @@ import { sendToPluginSafe } from "./useInitializedParam";
 import { base64ToFloat32Array, clamp } from "../utils/audio";
 import type { SampleInfo } from "../types/appTypes";
 import type { PluginMessage } from "../types/appTypes";
+import type { TuningStatus } from "../types/appTypes";
 
 type InitializedParam<T> = {
   ready: boolean;
@@ -23,6 +24,13 @@ type UsePluginMessagesOptions = {
   projectSampleRateParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
   detuneParam: InitializedParam<number>;
+  attackParam: InitializedParam<number>;
+  decayParam: InitializedParam<number>;
+  sustainParam: InitializedParam<number>;
+  releaseParam: InitializedParam<number>;
+  bendDepthParam: InitializedParam<number>;
+  polyphonyParam: InitializedParam<number>;
+  nudgeTo12EdoParam: InitializedParam<boolean>;
   sampleStartParam: InitializedParam<number>;
   sampleEndParam: InitializedParam<number>;
   resampleQualityInputParam: InitializedParam<number>;
@@ -37,6 +45,8 @@ type UsePluginMessagesOptions = {
   updateTask: (id: string, message: string) => void;
   removeTask: (id: string) => void;
   setPitchHz: Dispatch<SetStateAction<number | null>>;
+  setReferenceFrequencyHz: Dispatch<SetStateAction<number | null>>;
+  setTuningStatus: Dispatch<SetStateAction<TuningStatus | null>>;
   onSampleSaved: () => void;
   onCachedSampleLoaded: () => void;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
@@ -60,6 +70,13 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         projectSampleRateParam,
         gainParam,
         detuneParam,
+        attackParam,
+        decayParam,
+        sustainParam,
+        releaseParam,
+        bendDepthParam,
+        polyphonyParam,
+        nudgeTo12EdoParam,
         sampleStartParam,
         sampleEndParam,
         resampleQualityInputParam,
@@ -74,6 +91,8 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         updateTask,
         removeTask,
         setPitchHz,
+        setReferenceFrequencyHz,
+        setTuningStatus,
         onSampleSaved,
         onCachedSampleLoaded,
         audioBufferRef,
@@ -130,6 +149,56 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
           detuneParam.setFromPlugin(null);
         } else if (typeof message.detune === "number") {
           detuneParam.setFromPlugin(clamp(message.detune, -100, 100));
+        }
+        if (message.attack === null) {
+          attackParam.setFromPlugin(null);
+        } else if (typeof message.attack === "number") {
+          attackParam.setFromPlugin(Math.max(0, message.attack));
+        }
+        if (message.decay === null) {
+          decayParam.setFromPlugin(null);
+        } else if (typeof message.decay === "number") {
+          decayParam.setFromPlugin(Math.max(0, message.decay));
+        }
+        if (message.sustain === null) {
+          sustainParam.setFromPlugin(null);
+        } else if (typeof message.sustain === "number") {
+          sustainParam.setFromPlugin(clamp(message.sustain, 0, 1));
+        }
+        if (message.release === null) {
+          releaseParam.setFromPlugin(null);
+        } else if (typeof message.release === "number") {
+          releaseParam.setFromPlugin(Math.max(0, message.release));
+        }
+        if (message.bendDepth === null) {
+          bendDepthParam.setFromPlugin(null);
+        } else if (typeof message.bendDepth === "number") {
+          bendDepthParam.setFromPlugin(clamp(message.bendDepth, 100, 400));
+        }
+        if (message.polyphony === null) {
+          polyphonyParam.setFromPlugin(null);
+        } else if (typeof message.polyphony === "number") {
+          polyphonyParam.setFromPlugin(message.polyphony);
+        }
+        if (message.nudgeTo12Edo === null) {
+          nudgeTo12EdoParam.setFromPlugin(null);
+        } else if (typeof message.nudgeTo12Edo === "boolean") {
+          nudgeTo12EdoParam.setFromPlugin(message.nudgeTo12Edo);
+        }
+        if (message.referenceFrequencyHz === null) {
+          setReferenceFrequencyHz(null);
+        } else if (typeof message.referenceFrequencyHz === "number") {
+          setReferenceFrequencyHz(message.referenceFrequencyHz);
+        }
+        if (message.detectedPitchHz === null) {
+          setPitchHz(null);
+        } else if (typeof message.detectedPitchHz === "number") {
+          setPitchHz(message.detectedPitchHz);
+        }
+        if (message.tuningStatus === null) {
+          setTuningStatus(null);
+        } else if (typeof message.tuningStatus === "object") {
+          setTuningStatus(message.tuningStatus);
         }
         setStatus(nextStatus);
       }

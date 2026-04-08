@@ -350,13 +350,27 @@ body {
 /* ── Controls (horizontal) ── */
 .controls {
   display: grid;
-  grid-template-columns: 1.5fr 1.5fr 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid #e6d9cc;
   background: #fff9f3;
   align-items: end;
+}
+
+.radio-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.radio-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #5a3a22;
 }
 
 .control {
@@ -433,6 +447,27 @@ body {
 .control select:focus {
   outline: 2px solid rgba(224, 122, 63, 0.25);
   outline-offset: 2px;
+}
+
+.tuning-control {
+  display: grid;
+  gap: 6px;
+}
+
+.tuning-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.control-meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.control-meta-error {
+  color: #b23b34;
 }
 
 /* ── Footer ── */

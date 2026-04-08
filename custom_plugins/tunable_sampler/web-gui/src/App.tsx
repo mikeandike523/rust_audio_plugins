@@ -7,7 +7,7 @@ import { useSampleLoader } from "./hooks/useSampleLoader";
 import { useWaveformCanvas } from "./hooks/useWaveformCanvas";
 import { clamp } from "./utils/audio";
 import { hzToNoteInfo, formatPitchReadout } from "./utils/pitch";
-import type { SampleInfo } from "./types/appTypes";
+import type { SampleInfo, TuningStatus } from "./types/appTypes";
 import { Controls } from "./components/Controls";
 import { Footer } from "./components/Footer";
 import { LoadingOverlay } from "./components/LoadingOverlay";
@@ -21,9 +21,9 @@ export default function App() {
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [sampleInfo, setSampleInfo] = useState<SampleInfo | null>(null);
   const [pitchHz, setPitchHz] = useState<number | null>(null);
-  // true when nudge checkbox changed (or start pos changed) since the last estimate
+  const [referenceFrequencyHz, setReferenceFrequencyHz] = useState<number | null>(null);
+  const [tuningStatus, setTuningStatus] = useState<TuningStatus | null>(null);
   const [pitchStale, setPitchStale] = useState(false);
-  const [nudgeTo12edo, setNudgeTo12edo] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
@@ -34,7 +34,6 @@ export default function App() {
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const { tasks, addTask, updateTask, removeTask } = useLoadingTasks();
-  // Derived: the overlay blocks input whenever any task is active.
   const pitchLoading = tasks.some((t) => t.id === "pitch");
 
   const pluginVersionParam = useInitializedParam<string>({
@@ -49,24 +48,10 @@ export default function App() {
     pollMs: null,
   });
 
-  // Stable sendPayload factories — must not be inline arrow fns or they recreate
-  // setValue on every render, which destabilises throttled drag handlers.
-  const gainSendPayload = useCallback(
-    (value: number) => ({ type: "SetGain", value }),
-    [],
-  );
-  const detuneSendPayload = useCallback(
-    (value: number) => ({ type: "SetDetune", value }),
-    [],
-  );
-  const sampleStartSendPayload = useCallback(
-    (value: number) => ({ type: "SetSampleStart", value }),
-    [],
-  );
-  const sampleEndSendPayload = useCallback(
-    (value: number) => ({ type: "SetSampleEnd", value }),
-    [],
-  );
+  const gainSendPayload = useCallback((value: number) => ({ type: "SetGain", value }), []);
+  const detuneSendPayload = useCallback((value: number) => ({ type: "SetDetune", value }), []);
+  const sampleStartSendPayload = useCallback((value: number) => ({ type: "SetSampleStart", value }), []);
+  const sampleEndSendPayload = useCallback((value: number) => ({ type: "SetSampleEnd", value }), []);
   const resampleInputSendPayload = useCallback(
     (value: number) => ({ type: "SetResampleQualityInput", quality: value }),
     [],
@@ -75,6 +60,13 @@ export default function App() {
     (value: number) => ({ type: "SetResampleQualityPitch", quality: value }),
     [],
   );
+  const attackSendPayload = useCallback((value: number) => ({ type: "SetAttack", value }), []);
+  const decaySendPayload = useCallback((value: number) => ({ type: "SetDecay", value }), []);
+  const sustainSendPayload = useCallback((value: number) => ({ type: "SetSustain", value }), []);
+  const releaseSendPayload = useCallback((value: number) => ({ type: "SetRelease", value }), []);
+  const bendDepthSendPayload = useCallback((value: number) => ({ type: "SetBendDepth", value }), []);
+  const polyphonySendPayload = useCallback((value: number) => ({ type: "SetPolyphony", voices: value }), []);
+  const nudgeSendPayload = useCallback((value: boolean) => ({ type: "SetNudgeTo12Edo", enabled: value }), []);
 
   const gainParam = useInitializedParam<number>({
     name: "gain",
@@ -91,6 +83,62 @@ export default function App() {
     pollMs: null,
   });
 
+  const attackParam = useInitializedParam<number>({
+    name: "attack",
+    initialValue: 0.01,
+    requestPayload: requestStatePayload,
+    sendPayload: attackSendPayload,
+    pollMs: null,
+  });
+
+  const decayParam = useInitializedParam<number>({
+    name: "decay",
+    initialValue: 0.1,
+    requestPayload: requestStatePayload,
+    sendPayload: decaySendPayload,
+    pollMs: null,
+  });
+
+  const sustainParam = useInitializedParam<number>({
+    name: "sustain",
+    initialValue: 1,
+    requestPayload: requestStatePayload,
+    sendPayload: sustainSendPayload,
+    pollMs: null,
+  });
+
+  const releaseParam = useInitializedParam<number>({
+    name: "release",
+    initialValue: 0.25,
+    requestPayload: requestStatePayload,
+    sendPayload: releaseSendPayload,
+    pollMs: null,
+  });
+
+  const bendDepthParam = useInitializedParam<number>({
+    name: "bendDepth",
+    initialValue: 200,
+    requestPayload: requestStatePayload,
+    sendPayload: bendDepthSendPayload,
+    pollMs: null,
+  });
+
+  const polyphonyParam = useInitializedParam<number>({
+    name: "polyphony",
+    initialValue: 16,
+    requestPayload: requestStatePayload,
+    sendPayload: polyphonySendPayload,
+    pollMs: null,
+  });
+
+  const nudgeTo12EdoParam = useInitializedParam<boolean>({
+    name: "nudgeTo12Edo",
+    initialValue: false,
+    requestPayload: requestStatePayload,
+    sendPayload: nudgeSendPayload,
+    pollMs: null,
+  });
+
   const sampleStartParam = useInitializedParam<number>({
     name: "sampleStart",
     initialValue: 0,
@@ -101,7 +149,7 @@ export default function App() {
 
   const sampleEndParam = useInitializedParam<number>({
     name: "sampleEnd",
-    initialValue: 0,
+    initialValue: 1,
     requestPayload: requestStatePayload,
     sendPayload: sampleEndSendPayload,
     pollMs: null,
@@ -143,6 +191,7 @@ export default function App() {
     addTask("pitch", "Estimating pitch…");
     sendToPluginSafe({ type: "RequestPitchEstimate", sample_start: 0 });
     setPitchHz(null);
+    setReferenceFrequencyHz(null);
     setPitchStale(false);
   }, [addTask]);
 
@@ -160,6 +209,13 @@ export default function App() {
     projectSampleRateParam,
     gainParam,
     detuneParam,
+    attackParam,
+    decayParam,
+    sustainParam,
+    releaseParam,
+    bendDepthParam,
+    polyphonyParam,
+    nudgeTo12EdoParam,
     sampleStartParam,
     sampleEndParam,
     resampleQualityInputParam,
@@ -174,13 +230,14 @@ export default function App() {
     updateTask,
     removeTask,
     setPitchHz,
+    setReferenceFrequencyHz,
+    setTuningStatus,
     onSampleSaved,
     onCachedSampleLoaded,
     audioBufferRef,
     getAudioContext,
   });
 
-  // Clear stale whenever a pitch result arrives (detected or no-result).
   useEffect(() => {
     setPitchStale(false);
   }, [pitchHz]);
@@ -190,6 +247,13 @@ export default function App() {
     projectSampleRateParam.ready &&
     gainParam.ready &&
     detuneParam.ready &&
+    attackParam.ready &&
+    decayParam.ready &&
+    sustainParam.ready &&
+    releaseParam.ready &&
+    bendDepthParam.ready &&
+    polyphonyParam.ready &&
+    nudgeTo12EdoParam.ready &&
     sampleStartParam.ready &&
     sampleEndParam.ready &&
     resampleQualityInputParam.ready &&
@@ -217,7 +281,6 @@ export default function App() {
     onStatus: setStatus,
   });
 
-  // Sync decode state into the unified task system.
   useEffect(() => {
     if (isDecoding) {
       addTask("decode", "Decoding audio…");
@@ -237,12 +300,15 @@ export default function App() {
   };
 
   const handleForceResample = () => sendToPluginSafe({ type: "ForceResample" });
-
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
-
-  const handleDetuneChange = (value: number) =>
-    detuneParam.setValue(clamp(value, -100, 100));
+  const handleDetuneChange = (value: number) => detuneParam.setValue(clamp(value, -100, 100));
   const handleDetuneReset = () => detuneParam.setValue(0);
+  const handleAttackChange = (value: number) => attackParam.setValue(clamp(value, 0, 5));
+  const handleDecayChange = (value: number) => decayParam.setValue(clamp(value, 0, 5));
+  const handleSustainChange = (value: number) => sustainParam.setValue(clamp(value, 0, 1));
+  const handleReleaseChange = (value: number) => releaseParam.setValue(clamp(value, 0, 10));
+  const handleBendDepthChange = (value: number) => bendDepthParam.setValue(clamp(value, 100, 400));
+  const handlePolyphonyChange = (value: number) => polyphonyParam.setValue(value);
 
   const { setValue: setSampleStart } = sampleStartParam;
   const { setValue: setSampleEnd } = sampleEndParam;
@@ -262,11 +328,10 @@ export default function App() {
     setStatus(statusText);
   };
 
-  // Reset handles to full range when a new sample is loaded.
   useEffect(() => {
     if (!sampleInfo) {
       setSampleStart(0);
-      setSampleEnd(0);
+      setSampleEnd(1);
       return;
     }
     setSampleStart(0);
@@ -274,12 +339,22 @@ export default function App() {
   }, [sampleInfo, setSampleStart, setSampleEnd]);
 
   const handleNudgeChange = (checked: boolean) => {
-    setNudgeTo12edo(checked);
-    // Require recalculate after toggling nudge mode (same UX as changing start pos).
-    if (pitchHz !== null) {
-      setPitchStale(true);
-    }
+    nudgeTo12EdoParam.setValue(checked);
   };
+
+  const loadTuningFile = useCallback(async (file: File | null, actionType: "SetSclFile" | "SetKbmFile") => {
+    if (!file) return;
+    const contents = await file.text();
+    sendToPluginSafe({ type: actionType, name: file.name, contents });
+  }, []);
+
+  const handleSclFileChange = useCallback((file: File | null) => {
+    void loadTuningFile(file, "SetSclFile");
+  }, [loadTuningFile]);
+
+  const handleKbmFileChange = useCallback((file: File | null) => {
+    void loadTuningFile(file, "SetKbmFile");
+  }, [loadTuningFile]);
 
   const isCustomDir = cacheDirOverride !== null;
   const pitchNote = pitchHz !== null ? hzToNoteInfo(pitchHz) : null;
@@ -309,7 +384,6 @@ export default function App() {
       />
 
       <div className="info-strip">
-        {/* Cache dir */}
         <div className="info-block">
           <div className="section-label">Cache{isCustomDir ? " · custom" : ""}</div>
           <div className="info-path" title={effectiveCacheDir ?? undefined}>
@@ -331,7 +405,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sample meta */}
         <div className="info-block">
           <div className="section-label">Sample</div>
           <div className="info-name">{sampleInfo?.name ?? "No sample loaded"}</div>
@@ -343,24 +416,26 @@ export default function App() {
           {sampleError && <div className="info-error">{sampleError}</div>}
         </div>
 
-        {/* Pitch */}
         <div className="info-block">
           <div className="section-label">Pitch @ Start</div>
           <div className={`pitch-readout${pitchStale ? " is-stale" : ""}`}>
             {pitchLoading
               ? "Estimating…"
               : pitchNote !== null
-                ? formatPitchReadout(pitchNote, nudgeTo12edo)
+                ? formatPitchReadout(pitchNote, nudgeTo12EdoParam.value ?? false)
                 : "—"}
           </div>
           <label className="nudge-label">
             <input
               type="checkbox"
-              checked={nudgeTo12edo}
+              checked={nudgeTo12EdoParam.value ?? false}
               onChange={(e) => handleNudgeChange(e.target.checked)}
             />
             Nudge to nearest 12-EDO
           </label>
+          <div className="info-meta">
+            Reference: {referenceFrequencyHz !== null ? `${referenceFrequencyHz.toFixed(2)} Hz` : "—"}
+          </div>
           {sampleInfo && (
             <button
               className={`mini-button${pitchStale ? " needs-update" : ""}`}
@@ -380,11 +455,28 @@ export default function App() {
         detune={detuneParam.value}
         onDetuneChange={handleDetuneChange}
         onDetuneReset={handleDetuneReset}
+        attack={attackParam.value}
+        onAttackChange={handleAttackChange}
+        decay={decayParam.value}
+        onDecayChange={handleDecayChange}
+        sustain={sustainParam.value}
+        onSustainChange={handleSustainChange}
+        release={releaseParam.value}
+        onReleaseChange={handleReleaseChange}
+        bendDepth={bendDepthParam.value}
+        onBendDepthChange={handleBendDepthChange}
+        polyphony={polyphonyParam.value}
+        onPolyphonyChange={handlePolyphonyChange}
         resampleQualityInput={resampleQualityInputParam.value}
         resampleQualityPitch={resampleQualityPitchParam.value}
         onResampleQualityInputChange={(v) => resampleQualityInputParam.setValue(v)}
         onResampleQualityPitchChange={(v) => resampleQualityPitchParam.setValue(v)}
         onForceResample={handleForceResample}
+        tuningStatus={tuningStatus}
+        onSclFileChange={handleSclFileChange}
+        onKbmFileChange={handleKbmFileChange}
+        onClearSclFile={() => sendToPluginSafe({ type: "ClearSclFile" })}
+        onClearKbmFile={() => sendToPluginSafe({ type: "ClearKbmFile" })}
       />
 
       <Footer

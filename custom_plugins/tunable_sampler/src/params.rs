@@ -1,6 +1,7 @@
 use nih_plug::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use crate::tuning::TuningFile;
 
 #[derive(Params)]
 pub struct TunableSamplerParams {
@@ -17,6 +18,33 @@ pub struct TunableSamplerParams {
     #[id = "detune"]
     pub detune: FloatParam,
     pub detune_changed: Arc<AtomicBool>,
+    #[id = "attack"]
+    pub attack: FloatParam,
+    pub attack_changed: Arc<AtomicBool>,
+    #[id = "decay"]
+    pub decay: FloatParam,
+    pub decay_changed: Arc<AtomicBool>,
+    #[id = "sustain"]
+    pub sustain: FloatParam,
+    pub sustain_changed: Arc<AtomicBool>,
+    #[id = "release"]
+    pub release: FloatParam,
+    pub release_changed: Arc<AtomicBool>,
+    #[id = "bend_depth"]
+    pub bend_depth: FloatParam,
+    pub bend_depth_changed: Arc<AtomicBool>,
+    #[persist = "polyphony"]
+    pub polyphony: Arc<Mutex<u32>>,
+    #[persist = "nudge_to_12edo"]
+    pub nudge_to_12edo: Arc<Mutex<bool>>,
+    #[persist = "reference_frequency_hz"]
+    pub reference_frequency_hz: Arc<Mutex<Option<f32>>>,
+    #[persist = "detected_pitch_hz"]
+    pub detected_pitch_hz: Arc<Mutex<Option<f32>>>,
+    #[persist = "scl_file"]
+    pub scl_file: Arc<Mutex<Option<TuningFile>>>,
+    #[persist = "kbm_file"]
+    pub kbm_file: Arc<Mutex<Option<TuningFile>>>,
     /// Optional custom cache directory override. None = use platform default.
     #[persist = "cache_dir"]
     pub cache_dir: Arc<Mutex<Option<String>>>,
@@ -48,6 +76,31 @@ impl Default for TunableSamplerParams {
         let detune_callback = Arc::new(move |_: f32| {
             detune_changed_cb.store(true, Ordering::Relaxed);
         });
+        let attack_changed = Arc::new(AtomicBool::new(false));
+        let attack_changed_cb = attack_changed.clone();
+        let attack_callback = Arc::new(move |_: f32| {
+            attack_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let decay_changed = Arc::new(AtomicBool::new(false));
+        let decay_changed_cb = decay_changed.clone();
+        let decay_callback = Arc::new(move |_: f32| {
+            decay_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let sustain_changed = Arc::new(AtomicBool::new(false));
+        let sustain_changed_cb = sustain_changed.clone();
+        let sustain_callback = Arc::new(move |_: f32| {
+            sustain_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let release_changed = Arc::new(AtomicBool::new(false));
+        let release_changed_cb = release_changed.clone();
+        let release_callback = Arc::new(move |_: f32| {
+            release_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let bend_depth_changed = Arc::new(AtomicBool::new(false));
+        let bend_depth_changed_cb = bend_depth_changed.clone();
+        let bend_depth_callback = Arc::new(move |_: f32| {
+            bend_depth_changed_cb.store(true, Ordering::Relaxed);
+        });
 
         Self {
             gain: FloatParam::new(
@@ -73,7 +126,7 @@ impl Default for TunableSamplerParams {
             sample_start_changed,
             sample_end: FloatParam::new(
                 "Sample End",
-                0.0,
+                1.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_step_size(0.001)
@@ -91,6 +144,68 @@ impl Default for TunableSamplerParams {
             .with_unit(" ¢")
             .with_callback(detune_callback),
             detune_changed,
+            attack: FloatParam::new(
+                "Attack",
+                0.01,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 5.0,
+                },
+            )
+            .with_step_size(0.001)
+            .with_unit(" s")
+            .with_callback(attack_callback),
+            attack_changed,
+            decay: FloatParam::new(
+                "Decay",
+                0.1,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 5.0,
+                },
+            )
+            .with_step_size(0.001)
+            .with_unit(" s")
+            .with_callback(decay_callback),
+            decay_changed,
+            sustain: FloatParam::new(
+                "Sustain",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_step_size(0.001)
+            .with_callback(sustain_callback),
+            sustain_changed,
+            release: FloatParam::new(
+                "Release",
+                0.25,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 10.0,
+                },
+            )
+            .with_step_size(0.001)
+            .with_unit(" s")
+            .with_callback(release_callback),
+            release_changed,
+            bend_depth: FloatParam::new(
+                "Bend Depth",
+                200.0,
+                FloatRange::Linear {
+                    min: 100.0,
+                    max: 400.0,
+                },
+            )
+            .with_step_size(1.0)
+            .with_unit(" cents")
+            .with_callback(bend_depth_callback),
+            bend_depth_changed,
+            polyphony: Arc::new(Mutex::new(16)),
+            nudge_to_12edo: Arc::new(Mutex::new(false)),
+            reference_frequency_hz: Arc::new(Mutex::new(None)),
+            detected_pitch_hz: Arc::new(Mutex::new(None)),
+            scl_file: Arc::new(Mutex::new(None)),
+            kbm_file: Arc::new(Mutex::new(None)),
             cache_dir: Arc::new(Mutex::new(None)),
             sample_uuid: Arc::new(Mutex::new(None)),
         }

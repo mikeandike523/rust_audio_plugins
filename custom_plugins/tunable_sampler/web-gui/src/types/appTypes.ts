@@ -11,6 +11,21 @@ export type PluginMessage =
       sampleEnd?: number | null;
       gain?: number | null;
       detune?: number | null;
+      attack?: number | null;
+      decay?: number | null;
+      sustain?: number | null;
+      release?: number | null;
+      bendDepth?: number | null;
+      polyphony?: number | null;
+      nudgeTo12Edo?: boolean | null;
+      referenceFrequencyHz?: number | null;
+      detectedPitchHz?: number | null;
+      tuningStatus?: {
+        active: boolean;
+        scl_name?: string | null;
+        kbm_name?: string | null;
+        error?: string | null;
+      } | null;
     }
   | {
       type: "CacheDirError";
@@ -69,3 +84,9 @@ export type SampleInfo = {
   duration: number;
 };
 
+export type TuningStatus = {
+  active: boolean;
+  scl_name?: string | null;
+  kbm_name?: string | null;
+  error?: string | null;
+};
