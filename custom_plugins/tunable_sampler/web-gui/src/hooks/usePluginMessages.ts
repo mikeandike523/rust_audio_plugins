@@ -224,8 +224,6 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       }
 
       if (message.type === "CachedSample") {
-        if (audioBufferRef.current) return;
-
         try {
           const interleaved = base64ToFloat32Array(message.data_base64);
           const expectedLength = message.frames * message.channels;

@@ -206,6 +206,17 @@ impl TunableSampler {
         }));
     }
 
+    fn send_cached_sample_snapshot(
+        ctx: &WindowHandler,
+        params: &Arc<TunableSamplerParams>,
+    ) -> Result<bool, String> {
+        let Some(sample_dir) = get_sample_dir(&params.cache_dir, &params.sample_uuid) else {
+            return Ok(false);
+        };
+
+        send_cached_sample_if_available(ctx, &sample_dir)
+    }
+
     fn resolve_gui_url() -> &'static str {
         match std::thread::spawn(move || {
             use std::time::Duration;
@@ -507,6 +518,19 @@ impl Plugin for TunableSampler {
                                     &resample_quality_pitch,
                                     &tuning_state,
                                 );
+                                let current_uuid =
+                                    params.sample_uuid.lock().ok().and_then(|g| g.clone());
+                                if let Ok(mut guard) = last_sample_uuid.lock() {
+                                    *guard = current_uuid;
+                                }
+                                if let Err(message) =
+                                    TunableSampler::send_cached_sample_snapshot(ctx, &params)
+                                {
+                                    ctx.send_json(json!({
+                                        "type": "CachedSampleError",
+                                        "message": message,
+                                    }));
+                                }
                             }
                             Action::RequestState => {
                                 can_send_cached_sample.store(true, Ordering::Relaxed);
@@ -518,6 +542,19 @@ impl Plugin for TunableSampler {
                                     &resample_quality_pitch,
                                     &tuning_state,
                                 );
+                                let current_uuid =
+                                    params.sample_uuid.lock().ok().and_then(|g| g.clone());
+                                if let Ok(mut guard) = last_sample_uuid.lock() {
+                                    *guard = current_uuid;
+                                }
+                                if let Err(message) =
+                                    TunableSampler::send_cached_sample_snapshot(ctx, &params)
+                                {
+                                    ctx.send_json(json!({
+                                        "type": "CachedSampleError",
+                                        "message": message,
+                                    }));
+                                }
                             }
                             Action::PickCacheDir => {
                                 let cache_dir = params.cache_dir.clone();
