@@ -214,7 +214,12 @@ impl TunableSampler {
             return Ok(false);
         };
 
-        send_cached_sample_if_available(ctx, &sample_dir)
+        send_cached_sample_if_available(
+            ctx,
+            &sample_dir,
+            params.sample_start.value(),
+            params.sample_end.value(),
+        )
     }
 
     fn resolve_gui_url() -> &'static str {
@@ -968,7 +973,12 @@ impl Plugin for TunableSampler {
                                 params.cache_dir.lock().ok().and_then(|g| g.clone());
                             let effective_dir = effective_cache_dir(&cache_dir_override);
                             let s_dir = sample_dir(&effective_dir, &uuid);
-                            match send_cached_sample_if_available(ctx, &s_dir) {
+                            match send_cached_sample_if_available(
+                                ctx,
+                                &s_dir,
+                                params.sample_start.value(),
+                                params.sample_end.value(),
+                            ) {
                                 Ok(found) => {
                                     if found {
                                         resample_requested.store(true, Ordering::Relaxed);

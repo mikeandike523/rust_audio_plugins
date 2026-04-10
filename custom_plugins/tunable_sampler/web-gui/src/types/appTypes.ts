@@ -49,6 +49,8 @@ export type PluginMessage =
       channels: number;
       frames: number;
       data_base64: string;
+      sample_start?: number | null;
+      sample_end?: number | null;
     }
   | {
       type: "CachedSampleError";

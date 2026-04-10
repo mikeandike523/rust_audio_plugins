@@ -225,6 +225,13 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
 
       if (message.type === "CachedSample") {
         try {
+          if (typeof message.sample_start === "number") {
+            sampleStartParam.setFromPlugin(clamp(message.sample_start, 0, 1));
+          }
+          if (typeof message.sample_end === "number") {
+            sampleEndParam.setFromPlugin(clamp(message.sample_end, 0, 1));
+          }
+
           const interleaved = base64ToFloat32Array(message.data_base64);
           const expectedLength = message.frames * message.channels;
           if (interleaved.length !== expectedLength) {

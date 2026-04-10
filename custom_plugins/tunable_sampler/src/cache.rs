@@ -128,6 +128,8 @@ pub fn load_cached_sample(sample_dir: &Path) -> Result<Option<CachedSample>, Str
 pub fn send_cached_sample_if_available(
     ctx: &WindowHandler,
     sample_dir: &Path,
+    sample_start: f32,
+    sample_end: f32,
 ) -> Result<bool, String> {
     match load_cached_sample(sample_dir)? {
         Some(sample) => {
@@ -138,6 +140,8 @@ pub fn send_cached_sample_if_available(
                 "channels": sample.channels,
                 "frames": sample.frames,
                 "data_base64": sample.data_base64,
+                "sample_start": sample_start,
+                "sample_end": sample_end,
             }));
             Ok(true)
         }
