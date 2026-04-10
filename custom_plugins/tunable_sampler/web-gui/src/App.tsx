@@ -171,6 +171,9 @@ export default function App() {
     pollMs: null,
   });
 
+  const { setValue: setSampleStart } = sampleStartParam;
+  const { setValue: setSampleEnd } = sampleEndParam;
+
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext();
@@ -273,9 +276,15 @@ export default function App() {
     sampleInfo,
   });
 
+  const resetClipRange = useCallback(() => {
+    setSampleStart(0);
+    setSampleEnd(1);
+  }, [setSampleEnd, setSampleStart]);
+
   const { handleAudioFile, isDecoding } = useSampleLoader({
     audioBufferRef,
     getAudioContext,
+    onResetClipRange: resetClipRange,
     onSampleInfo: setSampleInfo,
     onSampleError: setSampleError,
     onStatus: setStatus,
@@ -310,9 +319,6 @@ export default function App() {
   const handleBendDepthChange = (value: number) => bendDepthParam.setValue(clamp(value, 100, 400));
   const handlePolyphonyChange = (value: number) => polyphonyParam.setValue(value);
 
-  const { setValue: setSampleStart } = sampleStartParam;
-  const { setValue: setSampleEnd } = sampleEndParam;
-
   const handleSampleStartChange = useCallback(
     (value: number) => setSampleStart(clamp(value, 0, 1)),
     [setSampleStart],
@@ -327,16 +333,6 @@ export default function App() {
     setSampleError(message);
     setStatus(statusText);
   };
-
-  useEffect(() => {
-    if (!sampleInfo) {
-      setSampleStart(0);
-      setSampleEnd(1);
-      return;
-    }
-    setSampleStart(0);
-    setSampleEnd(1);
-  }, [sampleInfo, setSampleStart, setSampleEnd]);
 
   const handleNudgeChange = (checked: boolean) => {
     nudgeTo12EdoParam.setValue(checked);

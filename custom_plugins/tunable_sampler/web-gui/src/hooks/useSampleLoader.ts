@@ -7,6 +7,7 @@ import type { SampleInfo } from "../types/appTypes";
 type UseSampleLoaderOptions = {
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
   getAudioContext: () => AudioContext;
+  onResetClipRange: () => void;
   onSampleInfo: (info: SampleInfo) => void;
   onSampleError: (message: string | null) => void;
   onStatus: (status: string) => void;
@@ -15,6 +16,7 @@ type UseSampleLoaderOptions = {
 export const useSampleLoader = ({
   audioBufferRef,
   getAudioContext,
+  onResetClipRange,
   onSampleInfo,
   onSampleError,
   onStatus,
@@ -32,6 +34,7 @@ export const useSampleLoader = ({
         const ctx = getAudioContext();
         const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
         audioBufferRef.current = audioBuffer;
+        onResetClipRange();
 
         const channels = audioBuffer.numberOfChannels;
         const frames = audioBuffer.length;
@@ -73,7 +76,7 @@ export const useSampleLoader = ({
         setIsDecoding(false);
       }
     },
-    [audioBufferRef, getAudioContext, onSampleError, onSampleInfo, onStatus],
+    [audioBufferRef, getAudioContext, onResetClipRange, onSampleError, onSampleInfo, onStatus],
   );
 
   return { handleAudioFile, isDecoding };
