@@ -19,6 +19,14 @@ pub fn default_cache_dir() -> PathBuf {
     }
 }
 
+pub fn default_webview_userdata_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "TunableSampler") {
+        proj.data_local_dir().join("webview_userdata")
+    } else {
+        std::env::temp_dir().join("tunable_sampler_webview_userdata")
+    }
+}
+
 pub fn effective_cache_dir(override_dir: &Option<String>) -> PathBuf {
     match override_dir {
         Some(s) => PathBuf::from(s),

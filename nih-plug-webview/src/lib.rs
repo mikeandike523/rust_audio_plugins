@@ -5,6 +5,7 @@ use nih_plug::prelude::{Editor, GuiContext, ParamSetter};
 use serde_json::Value;
 use std::{
     borrow::Cow,
+    path::PathBuf,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc,
@@ -32,6 +33,7 @@ pub struct WebViewEditor {
     source: Arc<HTMLSource>,
     width: Arc<AtomicU32>,
     height: Arc<AtomicU32>,
+    data_directory: Option<PathBuf>,
     event_loop_handler: Arc<EventLoopHandler>,
     keyboard_handler: Arc<KeyboardHandler>,
     mouse_handler: Arc<MouseHandler>,
@@ -53,6 +55,7 @@ impl WebViewEditor {
             source: Arc::new(source),
             width,
             height,
+            data_directory: None,
             developer_mode: false,
             background_color: (255, 255, 255, 255),
             event_loop_handler: Arc::new(|_, _, _| {}),
@@ -75,6 +78,11 @@ impl WebViewEditor {
             + Sync,
     {
         self.custom_protocol = Some((name, Arc::new(handler)));
+        self
+    }
+
+    pub fn with_data_directory(mut self, data_directory: PathBuf) -> Self {
+        self.data_directory = Some(data_directory);
         self
     }
 
@@ -248,6 +256,7 @@ impl Editor for WebViewEditor {
         let developer_mode = self.developer_mode;
         let source = self.source.clone();
         let background_color = self.background_color;
+        let data_directory = self.data_directory.clone();
         let custom_protocol = self.custom_protocol.clone();
         let event_loop_handler = self.event_loop_handler.clone();
         let keyboard_handler = self.keyboard_handler.clone();
@@ -256,7 +265,21 @@ impl Editor for WebViewEditor {
         let window_handle = baseview::Window::open_parented(&parent, options, move |window| {
             let (events_sender, events_receiver) = unbounded();
 
-            let mut web_context = WebContext::new(Some(std::env::temp_dir()));
+            let web_context_dir = data_directory
+                .clone()
+                .or_else(|| Some(std::env::temp_dir().join("nih-plug-webview")));
+
+            if let Some(dir) = web_context_dir.as_ref() {
+                if let Err(err) = std::fs::create_dir_all(dir) {
+                    eprintln!(
+                        "Failed to create webview data directory '{}': {}",
+                        dir.display(),
+                        err
+                    );
+                }
+            }
+
+            let mut web_context = WebContext::new(web_context_dir);
 
             let mut webview_builder = WebViewBuilder::new_as_child(window)
                 .with_bounds(wry::Rect {

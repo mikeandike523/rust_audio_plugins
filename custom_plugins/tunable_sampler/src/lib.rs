@@ -18,9 +18,9 @@ use crate::tuning::TuningState;
 use nih_plug::prelude::util;
 
 use crate::cache::{
-    effective_cache_dir, get_sample_dir, load_resampled_data, new_unique_cache_key,
-    queue_folder_result, sample_cache_exists, sample_dir, send_cached_sample_if_available,
-    save_sample_to_cache,
+    default_webview_userdata_dir, effective_cache_dir, get_sample_dir, load_resampled_data,
+    new_unique_cache_key, queue_folder_result, sample_cache_exists, sample_dir,
+    send_cached_sample_if_available, save_sample_to_cache,
 };
 use crate::constants::{
     DEFAULT_RESAMPLE_QUALITY_INPUT, DEFAULT_RESAMPLE_QUALITY_PITCH,
@@ -508,6 +508,7 @@ impl Plugin for TunableSampler {
         let last_sample_uuid: Mutex<Option<String>> = Mutex::new(None);
         let can_send_cached_sample = AtomicBool::new(false);
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
+            .with_data_directory(default_webview_userdata_dir())
             .with_developer_mode(true)
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
