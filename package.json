@@ -29,6 +29,8 @@
     "dispatch:rust:bundle-dev":"bash scripts/package-json/dispatch/rust/bundle-dev.sh",
     "dispatch:rust:bundle-release":"bash scripts/package-json/dispatch/rust/bundle-release.sh",
 
+    "tunable_sampler_iced:rust:bundle-release":"bash scripts/package-json/tunable_sampler_iced/rust/bundle-release.sh",
+
     "bootstrap-new-project": "bash __inenv python scripts/package-json/bootstrap_new_project.py",
     "start-log-server": "node scripts/log-server.js"
   },

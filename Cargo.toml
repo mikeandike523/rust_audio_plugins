@@ -19,6 +19,7 @@ members = [
   "xtask",
   "nih-plug-webview",
   "anymap-1.0.0-beta.2",
+  "nih_plug_iced",
 
   "custom_plugins/harmonic_nxo",
   "custom_plugins/mixmean",
@@ -27,6 +28,7 @@ members = [
   "custom_plugins/tunable_sampler",
   "custom_plugins/open_spatial",
   "custom_plugins/dispatch",
+  "custom_plugins/tunable_sampler_iced",
 ]
 
 [features]
