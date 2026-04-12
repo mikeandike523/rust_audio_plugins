@@ -14,3 +14,4 @@ nih_plug_webview = { path = "../../nih-plug-webview" }
 ordered-float = "2"
 ureq = { version = "2", features = ["json"]}
 tune = "0.34.0"
+directories = "6.0.0"

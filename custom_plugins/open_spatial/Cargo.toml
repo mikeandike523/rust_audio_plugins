@@ -14,3 +14,4 @@ nih_plug_webview = { path = "../../nih-plug-webview" }
 sha2 = "0.10"
 sofar = "0.2.1"
 ureq = "2.10.1"
+directories = "6.0.0"

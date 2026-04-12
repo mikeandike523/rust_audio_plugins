@@ -5,12 +5,14 @@ use ADSR::{EnvelopeParams, is_finished, value_at};
 use nih_plug_webview::*;
 use remote_logging::RemoteLogger;
 
+use directories::ProjectDirs;
 use nih_plug::prelude::*;
 use ureq::json;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     num::NonZeroU32,
+    path::PathBuf,
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -39,6 +41,14 @@ const DEFAULT_A: f32 = 0.005;
 const DEFAULT_D: f32 = 0.005;
 const DEFAULT_S: f32 = 1.0;
 const DEFAULT_R: f32 = 0.005;
+
+fn webview_userdata_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "HarmonicNxo") {
+        proj.data_local_dir().join("webview_userdata")
+    } else {
+        std::env::temp_dir().join("harmonic_nxo_webview_userdata")
+    }
+}
 
 fn velocity_to_gain(velocity: f32) -> f32 {
     let v = velocity.clamp(0.0, 1.0);
@@ -729,6 +739,7 @@ impl Plugin for HarmonicNxo {
 
         let editor = WebViewEditor::new(HTMLSource::URL(url), (1000, 750))
             .with_developer_mode(true)
+            .with_data_directory(webview_userdata_dir())
             .with_keyboard_handler(move |event| {
                 println!("keyboard event: {event:#?}");
                 event.key == Key::Escape

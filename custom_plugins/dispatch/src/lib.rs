@@ -35,6 +35,14 @@ fn default_cache_dir() -> PathBuf {
     }
 }
 
+fn default_webview_userdata_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "Dispatch") {
+        proj.data_local_dir().join("webview_userdata")
+    } else {
+        std::env::temp_dir().join("dispatch_webview_userdata")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // UUID generation — 8 lowercase hex chars, collision-checked against cache dir
 // ---------------------------------------------------------------------------
@@ -928,6 +936,7 @@ impl Plugin for Dispatch {
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
+            .with_data_directory(default_webview_userdata_dir())
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     let action = match serde_json::from_value::<Action>(value) {

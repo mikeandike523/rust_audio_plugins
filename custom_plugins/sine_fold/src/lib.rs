@@ -1,8 +1,10 @@
+use directories::ProjectDirs;
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use serde::Deserialize;
 use serde_json::json;
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -112,6 +114,14 @@ enum Action {
     Init,
     SetFold { value: f32 },
     SetGain { value: f32 },
+}
+
+fn webview_userdata_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "SineFold") {
+        proj.data_local_dir().join("webview_userdata")
+    } else {
+        std::env::temp_dir().join("sine_fold_webview_userdata")
+    }
 }
 
 impl BasicPluginExample {
@@ -284,6 +294,7 @@ impl Plugin for BasicPluginExample {
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
+            .with_data_directory(webview_userdata_dir())
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     if let Ok(action) = serde_json::from_value::<Action>(value) {

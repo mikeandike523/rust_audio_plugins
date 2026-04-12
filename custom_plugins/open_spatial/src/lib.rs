@@ -1,5 +1,6 @@
 mod remote_logging;
 
+use directories::ProjectDirs;
 use nih_plug::prelude::*;
 use nih_plug_webview::*;
 use remote_logging::RemoteLogger;
@@ -1754,6 +1755,7 @@ impl Plugin for OpenSpatial {
 
         let editor = WebViewEditor::new(source, (GUI_WIDTH, GUI_HEIGHT))
             .with_developer_mode(true)
+            .with_data_directory(webview_userdata_dir())
             .with_event_loop(move |ctx, setter, _window| {
                 while let Ok(value) = ctx.next_event() {
                     remote_logger.log_step("editor.event_raw", value.to_string());
@@ -2160,6 +2162,14 @@ fn hex_encode(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
+}
+
+fn webview_userdata_dir() -> PathBuf {
+    if let Some(proj) = ProjectDirs::from("com", "WTH Plugins", "OpenSpatial") {
+        proj.data_local_dir().join("webview_userdata")
+    } else {
+        std::env::temp_dir().join("open_spatial_webview_userdata")
+    }
 }
 
 fn default_cache_root() -> PathBuf {
