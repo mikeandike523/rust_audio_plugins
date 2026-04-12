@@ -63,6 +63,8 @@ export const Controls = ({
 }: ControlsProps) => {
   const sclInputRef = useRef<HTMLInputElement | null>(null);
   const kbmInputRef = useRef<HTMLInputElement | null>(null);
+  const sclStatus = tuningStatus?.scl_name ? tuningStatus.scl_name : "No SCL loaded";
+  const kbmStatus = tuningStatus?.kbm_name ? tuningStatus.kbm_name : "No KBM loaded";
 
   return (
   <section className="controls">
@@ -237,7 +239,7 @@ export const Controls = ({
 
     <div className="control tuning-control">
       <label>Tuning</label>
-      <div className="tuning-row">
+      <div className="tuning-file-row">
         <input
           ref={sclInputRef}
           className="hidden-file-input"
@@ -256,9 +258,9 @@ export const Controls = ({
           Choose SCL
         </button>
         <button className="mini-button" type="button" onClick={onClearSclFile}>Clear SCL</button>
+        <div className="file-status" title={sclStatus}>{sclStatus}</div>
       </div>
-      <div className="file-status">{tuningStatus?.scl_name ? tuningStatus.scl_name : "No SCL loaded"}</div>
-      <div className="tuning-row">
+      <div className="tuning-file-row">
         <input
           ref={kbmInputRef}
           className="hidden-file-input"
@@ -277,8 +279,8 @@ export const Controls = ({
           Choose KBM
         </button>
         <button className="mini-button" type="button" onClick={onClearKbmFile}>Clear KBM</button>
+        <div className="file-status" title={kbmStatus}>{kbmStatus}</div>
       </div>
-      <div className="file-status">{tuningStatus?.kbm_name ? tuningStatus.kbm_name : "No KBM loaded"}</div>
       <div className={`control-meta${tuningStatus?.error ? " control-meta-error" : ""}`}>
         {tuningStatus?.error
           ? tuningStatus.error

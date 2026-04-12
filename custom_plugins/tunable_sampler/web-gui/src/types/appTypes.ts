@@ -92,3 +92,9 @@ export type TuningStatus = {
   kbm_name?: string | null;
   error?: string | null;
 };
+
+export type ResampleModalState = {
+  label: string;
+  progress: number;
+  message?: string | null;
+};

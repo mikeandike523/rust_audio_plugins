@@ -304,6 +304,36 @@ export default function App() {
     sendToPluginSafe({ type: "PickCacheDir" });
   };
 
+  const handleHardRefresh = useCallback(async () => {
+    setStatus("Clearing browser caches...");
+
+    try {
+      if ("caches" in window) {
+        const cacheKeys = await window.caches.keys();
+        await Promise.allSettled(cacheKeys.map((key) => window.caches.delete(key)));
+      }
+
+      try {
+        window.localStorage.clear();
+      } catch {
+        // Best effort only.
+      }
+
+      try {
+        window.sessionStorage.clear();
+      } catch {
+        // Best effort only.
+      }
+
+      if ("serviceWorker" in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.allSettled(registrations.map((registration) => registration.unregister()));
+      }
+    } finally {
+      window.location.reload();
+    }
+  }, []);
+
   const handleClearCacheDir = () => {
     sendToPluginSafe({ type: "ClearCacheDir" });
   };
@@ -362,7 +392,20 @@ export default function App() {
           <h1>Tunable Sampler</h1>
           <div className="subtitle">Instrument Setup</div>
         </div>
-        <div className="status-chip">{status}</div>
+        <div className="top-bar-actions">
+          <button
+            className="refresh-button"
+            type="button"
+            onClick={() => {
+              void handleHardRefresh();
+            }}
+            title="Clear browser cache/storage and reload the UI"
+            aria-label="Clear browser cache and refresh"
+          >
+            Clear cache + refresh
+          </button>
+          <div className="status-chip">{status}</div>
+        </div>
       </header>
 
       <SampleDrop

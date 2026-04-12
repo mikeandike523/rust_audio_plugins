@@ -39,6 +39,7 @@ body {
   display: grid;
   grid-template-rows: auto 1fr auto auto auto;
   gap: 10px;
+  min-height: 0;
 }
 
 /* ── Header ── */
@@ -47,6 +48,14 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
 .top-bar-title h1 {
@@ -75,6 +84,25 @@ body {
   text-overflow: ellipsis;
 }
 
+.refresh-button {
+  border: 1px solid #dccab8;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #fffaf4;
+  color: #6a3c21;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.refresh-button:hover {
+  background: #ffeddc;
+}
+
 /* ── Section label (shared) ── */
 .section-label {
   font-size: 10px;
@@ -90,9 +118,11 @@ body {
   border: 2px dashed #d7c7b7;
   background: #fffdfb;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 6px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
@@ -109,7 +139,7 @@ body {
 
 .sample-drop-inner {
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 6px;
   height: 100%;
   min-height: 0;
@@ -123,6 +153,7 @@ body {
   width: 100%;
   height: 100%;
   min-height: 140px;
+  min-width: 0;
 }
 
 .waveform {
@@ -130,6 +161,7 @@ body {
   width: 100%;
   height: 100%;
   min-height: 140px;
+  min-width: 0;
   border-radius: 10px;
   background: linear-gradient(
     180deg,
@@ -472,6 +504,13 @@ body {
   flex-wrap: wrap;
 }
 
+.tuning-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .control-meta {
   font-size: 10px;
   color: var(--muted);
@@ -502,6 +541,8 @@ body {
   font-size: 10px;
   color: #5f5449;
   font-weight: 600;
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
