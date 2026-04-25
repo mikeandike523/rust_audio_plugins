@@ -18,8 +18,8 @@ import {
 
 function App() {
 
-  // Detect Vite environment
   const url = window.location.href;
+  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
 
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -55,6 +55,17 @@ function App() {
       ),
     []
   );
+
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
   useEffect(() => {
     workerRef.current = new Worker(
@@ -542,6 +553,11 @@ Return value should be a lua table which is akin to the following typescript typ
       </Div>
       {/* Piano Widget */}
       <PianoWidget midiStates={midiStates} />
+      {isOffline && (
+        <div className="offline-banner">
+          Offline — loaded from PWA cache · {url}
+        </div>
+      )}
     </Div>
   );
 }

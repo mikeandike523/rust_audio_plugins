@@ -502,6 +502,7 @@ export default function App() {
   const [showOriginalName, setShowOriginalName] = useState(true);
   const [connected, setConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<"pads" | "mixer">("pads");
+  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
 
@@ -566,6 +567,17 @@ export default function App() {
     return () => {
       window.onPluginMessage = undefined;
       document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
     };
   }, []);
 
@@ -738,6 +750,11 @@ export default function App() {
         <span>{connected ? "Connected" : "Connecting..."}</span>
         <span className="footer-versions">plugin {pluginVersion ?? "—"} · gui {guiVersion}</span>
       </footer>
+      {isOffline && (
+        <div className="offline-banner">
+          Offline — loaded from PWA cache · {window.location.href}
+        </div>
+      )}
     </div>
   );
 }

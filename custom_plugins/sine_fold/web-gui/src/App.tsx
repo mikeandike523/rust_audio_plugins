@@ -37,6 +37,7 @@ export default function App() {
   const [meterOutput, setMeterOutput] = useState<MeterValues>({ l: 0, r: 0 });
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
   const [loadedFrom] = useState(() => window.location.href);
+  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
   const didInit = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
@@ -79,6 +80,17 @@ export default function App() {
       if (window.onPluginMessage) {
         window.onPluginMessage = undefined;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
     };
   }, []);
 
@@ -294,6 +306,11 @@ export default function App() {
       </div>
 
       <div className="footer">{status}</div>
+      {isOffline && (
+        <div className="offline-banner">
+          Offline — loaded from PWA cache · {loadedFrom}
+        </div>
+      )}
     </div>
   );
 }

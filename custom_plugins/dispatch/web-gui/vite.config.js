@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 
 const packageJson = JSON.parse(
   fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")
@@ -54,7 +55,25 @@ const devProbePlugin = () => ({
 
 export default defineConfig({
   base: "./",
-  plugins: [react(), devProbePlugin()],
+  plugins: [
+    react(),
+    devProbePlugin(),
+    VitePWA({
+      registerType: "autoUpdate",
+      injectRegister: "auto",
+      workbox: {
+        globPatterns: ["**/*.{js,css,html}"],
+        cleanupOutdatedCaches: true,
+      },
+      manifest: {
+        name: "Dispatch",
+        short_name: "Dispatch",
+        theme_color: "#111113",
+        background_color: "#111113",
+        display: "standalone",
+      },
+    }),
+  ],
   define: {
     "import.meta.env.VITE_GUI_VERSION": JSON.stringify(packageJson.version),
   },

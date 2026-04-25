@@ -239,3 +239,19 @@ input[type="range"]::-moz-range-track {
     text-align: left;
   }
 }
+
+.offline-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #7a5500;
+  color: #ffe0a0;
+  font-size: 11px;
+  padding: 3px 10px;
+  text-align: center;
+  z-index: 9999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

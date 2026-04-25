@@ -25,6 +25,7 @@ export default function App() {
   const [tuningStatus, setTuningStatus] = useState<TuningStatus | null>(null);
   const [pitchStale, setPitchStale] = useState(false);
   const [loadedFrom] = useState(() => window.location.href);
+  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
   const requestStatePayload = useMemo(() => ({ type: "RequestState" }), []);
 
@@ -240,6 +241,17 @@ export default function App() {
     audioBufferRef,
     getAudioContext,
   });
+
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
   useEffect(() => {
     setPitchStale(false);
@@ -525,6 +537,11 @@ export default function App() {
       />
 
       <LoadingOverlay tasks={tasks} />
+      {isOffline && (
+        <div className="offline-banner">
+          Offline — loaded from PWA cache · {loadedFrom}
+        </div>
+      )}
     </div>
   );
 }

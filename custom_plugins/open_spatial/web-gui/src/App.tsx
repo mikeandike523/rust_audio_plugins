@@ -342,6 +342,7 @@ export default function App() {
   const [meterInput, setMeterInput] = useState<MeterValues>({ l: 0, r: 0 });
   const [meterOutput, setMeterOutput] = useState<MeterValues>({ l: 0, r: 0 });
   const [loadedFrom] = useState(() => window.location.href);
+  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
   const didInit = useRef(false);
   const guiVersion = import.meta.env.VITE_GUI_VERSION ?? "dev";
 
@@ -457,6 +458,17 @@ export default function App() {
       window.onPluginMessage = undefined;
     };
   }, [guiVersion, loadedFrom]);
+
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
   const effectiveSourceYaw = alwaysTowardsHead ? getAutoSourceYaw(azimuth) : sourceYaw;
   const sourcePoint = useMemo(
@@ -1125,6 +1137,11 @@ export default function App() {
         <span>plugin {pluginVersion ?? "unknown"}</span>
         <span>gui {guiVersion}</span>
       </footer>
+      {isOffline && (
+        <div className="offline-banner">
+          Offline — loaded from PWA cache · {loadedFrom}
+        </div>
+      )}
     </div>
   );
 }
