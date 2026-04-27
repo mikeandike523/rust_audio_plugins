@@ -1,4 +1,4 @@
-import { useEffect, type MutableRefObject } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 
 import { drawWaveform } from "../utils/waveform";
 import type { SampleInfo } from "../types/appTypes";
@@ -8,6 +8,7 @@ type UseWaveformCanvasOptions = {
   canvasRef: MutableRefObject<HTMLCanvasElement | null>;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
   sampleInfo: SampleInfo | null;
+  preampDb: number;
 };
 
 export const useWaveformCanvas = ({
@@ -15,7 +16,11 @@ export const useWaveformCanvas = ({
   canvasRef,
   audioBufferRef,
   sampleInfo,
+  preampDb,
 }: UseWaveformCanvasOptions) => {
+  const preampDbRef = useRef(preampDb);
+  preampDbRef.current = preampDb;
+
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
@@ -31,7 +36,7 @@ export const useWaveformCanvas = ({
       if (canvas.height !== height) {
         canvas.height = height;
       }
-      drawWaveform(canvas, audioBufferRef.current);
+      drawWaveform(canvas, audioBufferRef.current, preampDbRef.current);
     };
 
     let raf1 = 0;
@@ -74,10 +79,10 @@ export const useWaveformCanvas = ({
   }, [audioBufferRef, canvasRef, containerRef]);
 
   useEffect(() => {
-    drawWaveform(canvasRef.current, audioBufferRef.current);
+    drawWaveform(canvasRef.current, audioBufferRef.current, preampDb);
     const timeoutId = window.setTimeout(() => {
-      drawWaveform(canvasRef.current, audioBufferRef.current);
+      drawWaveform(canvasRef.current, audioBufferRef.current, preampDb);
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [audioBufferRef, canvasRef, sampleInfo]);
+  }, [audioBufferRef, canvasRef, sampleInfo, preampDb]);
 };

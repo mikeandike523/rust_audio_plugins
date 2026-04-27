@@ -10,6 +10,7 @@ pub enum Action {
     SetCacheDir { path: String },
     ClearCacheDir,
     SetGain { value: f32 },
+    SetPreamp { value: f32 },
     SetSampleStart { value: f32 },
     SetSampleEnd { value: f32 },
     SetResampleQualityInput { quality: u32 },

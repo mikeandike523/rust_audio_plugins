@@ -22,6 +22,7 @@ type InitializedParam<T> = {
 type UsePluginMessagesOptions = {
   pluginVersionParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
+  preampParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
   detuneParam: InitializedParam<number>;
   attackParam: InitializedParam<number>;
@@ -68,6 +69,7 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       const {
         pluginVersionParam,
         projectSampleRateParam,
+        preampParam,
         gainParam,
         detuneParam,
         attackParam,
@@ -139,6 +141,11 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
           sampleEndParam.setFromPlugin(null);
         } else if (typeof message.sampleEnd === "number") {
           sampleEndParam.setFromPlugin(clamp(message.sampleEnd, 0, 1));
+        }
+        if (message.preamp === null) {
+          preampParam.setFromPlugin(null);
+        } else if (typeof message.preamp === "number") {
+          preampParam.setFromPlugin(clamp(message.preamp, -30, 15));
         }
         if (message.gain === null) {
           gainParam.setFromPlugin(null);

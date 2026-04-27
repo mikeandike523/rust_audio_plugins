@@ -186,6 +186,7 @@ impl TunableSampler {
             "pluginVersion": env!("CARGO_PKG_VERSION"),
             "effectiveCacheDir": effective_dir.to_string_lossy(),
             "cacheDirOverride": cache_dir_override,
+            "preamp": params.preamp.value(),
             "gain": params.gain.value(),
             "detune": params.detune.value(),
             "attack": params.attack.value(),
@@ -470,7 +471,8 @@ impl Plugin for TunableSampler {
                 }
             }
 
-            let gain = util::db_to_gain_fast(self.params.gain.smoothed.next());
+            let gain = util::db_to_gain_fast(self.params.preamp.smoothed.next())
+                * util::db_to_gain_fast(self.params.gain.smoothed.next());
             let mut ch = channels.into_iter();
             if let Some(s) = ch.next() {
                 *s = out[0] * gain;
@@ -608,6 +610,13 @@ impl Plugin for TunableSampler {
                                 setter.begin_set_parameter(&params.gain);
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
+                            }
+                            Action::SetPreamp { value } => {
+                                let clamped = value.clamp(-30.0, 15.0);
+                                setter.begin_set_parameter(&params.preamp);
+                                setter.set_parameter(&params.preamp, clamped);
+                                setter.end_set_parameter(&params.preamp);
+                                params.preamp_changed.store(false, Ordering::Relaxed);
                             }
                             Action::SetDetune { value } => {
                                 let clamped = value.clamp(-100.0, 100.0);
@@ -890,6 +899,13 @@ impl Plugin for TunableSampler {
                             }
                         }
                     }
+                }
+
+                if params.preamp_changed.swap(false, Ordering::Relaxed) {
+                    ctx.send_json(json!({
+                        "type": "State",
+                        "preamp": params.preamp.value(),
+                    }));
                 }
 
                 if params.gain_changed.swap(false, Ordering::Relaxed) {

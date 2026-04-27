@@ -49,6 +49,7 @@ export default function App() {
     pollMs: null,
   });
 
+  const preampSendPayload = useCallback((value: number) => ({ type: "SetPreamp", value }), []);
   const gainSendPayload = useCallback((value: number) => ({ type: "SetGain", value }), []);
   const detuneSendPayload = useCallback((value: number) => ({ type: "SetDetune", value }), []);
   const sampleStartSendPayload = useCallback((value: number) => ({ type: "SetSampleStart", value }), []);
@@ -68,6 +69,14 @@ export default function App() {
   const bendDepthSendPayload = useCallback((value: number) => ({ type: "SetBendDepth", value }), []);
   const polyphonySendPayload = useCallback((value: number) => ({ type: "SetPolyphony", voices: value }), []);
   const nudgeSendPayload = useCallback((value: boolean) => ({ type: "SetNudgeTo12Edo", enabled: value }), []);
+
+  const preampParam = useInitializedParam<number>({
+    name: "preamp",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: preampSendPayload,
+    pollMs: null,
+  });
 
   const gainParam = useInitializedParam<number>({
     name: "gain",
@@ -211,6 +220,7 @@ export default function App() {
   usePluginMessages({
     pluginVersionParam,
     projectSampleRateParam,
+    preampParam,
     gainParam,
     detuneParam,
     attackParam,
@@ -260,6 +270,7 @@ export default function App() {
   const allParamsReady =
     pluginVersionParam.ready &&
     projectSampleRateParam.ready &&
+    preampParam.ready &&
     gainParam.ready &&
     detuneParam.ready &&
     attackParam.ready &&
@@ -286,6 +297,7 @@ export default function App() {
     canvasRef: waveformCanvasRef,
     audioBufferRef,
     sampleInfo,
+    preampDb: preampParam.value ?? 0,
   });
 
   const resetClipRange = useCallback(() => {
@@ -351,6 +363,8 @@ export default function App() {
   };
 
   const handleForceResample = () => sendToPluginSafe({ type: "ForceResample" });
+  const handlePreampChange = (value: number) => preampParam.setValue(clamp(value, -30, 15));
+  const handlePreampReset = () => preampParam.setValue(0);
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
   const handleDetuneChange = (value: number) => detuneParam.setValue(clamp(value, -100, 100));
   const handleDetuneReset = () => detuneParam.setValue(0);
@@ -501,6 +515,9 @@ export default function App() {
       </div>
 
       <Controls
+        preamp={preampParam.value}
+        onPreampChange={handlePreampChange}
+        onPreampReset={handlePreampReset}
         gain={gainParam.value}
         onGainChange={handleGainChange}
         detune={detuneParam.value}

@@ -9,6 +9,7 @@ export type PluginMessage =
       resampleQualityPitch?: number | null;
       sampleStart?: number | null;
       sampleEnd?: number | null;
+      preamp?: number | null;
       gain?: number | null;
       detune?: number | null;
       attack?: number | null;

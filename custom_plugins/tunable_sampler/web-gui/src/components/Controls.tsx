@@ -3,6 +3,9 @@ import type { TuningStatus } from "../types/appTypes";
 import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
 type ControlsProps = {
+  preamp: number | null;
+  onPreampChange: (value: number) => void;
+  onPreampReset: () => void;
   gain: number | null;
   onGainChange: (value: number) => void;
   detune: number | null;
@@ -33,6 +36,9 @@ type ControlsProps = {
 };
 
 export const Controls = ({
+  preamp,
+  onPreampChange,
+  onPreampReset,
   gain,
   onGainChange,
   detune,
@@ -68,6 +74,25 @@ export const Controls = ({
 
   return (
   <section className="controls">
+    <div className="control">
+      <label htmlFor="preamp">Preamp</label>
+      <div className="control-row">
+        <div onDoubleClick={onPreampReset} title="Double-click to reset to 0 dB">
+          <input
+            id="preamp"
+            type="range"
+            min="-30"
+            max="15"
+            step="0.1"
+            value={preamp ?? 0}
+            onChange={(e) => onPreampChange(Number(e.target.value))}
+            disabled={preamp === null}
+          />
+        </div>
+        <span className="value">{preamp === null ? "—" : `${preamp >= 0 ? "+" : ""}${preamp.toFixed(1)} dB`}</span>
+      </div>
+    </div>
+
     <div className="control">
       <label htmlFor="gain">Gain</label>
       <div className="control-row">

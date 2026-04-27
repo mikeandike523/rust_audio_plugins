@@ -29,6 +29,7 @@ members = [
   "custom_plugins/open_spatial",
   "custom_plugins/dispatch",
   "custom_plugins/tunable_sampler_iced",
+  "custom_plugins/string_sim",
 ]
 
 [features]

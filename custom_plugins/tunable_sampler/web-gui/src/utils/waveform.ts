@@ -1,6 +1,7 @@
 export const drawWaveform = (
   canvas: HTMLCanvasElement | null,
   audioBuffer: AudioBuffer | null,
+  preampDb = 0,
 ) => {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -20,6 +21,7 @@ export const drawWaveform = (
   const mid = height / 2;
   const padding = 12;
   const usableHeight = Math.max(0, mid - padding);
+  const preampScale = Math.pow(10, preampDb / 20);
 
   ctx.strokeStyle = "#e07a3f";
   ctx.lineWidth = 1;
@@ -37,7 +39,7 @@ export const drawWaveform = (
         if (abs > peak) peak = abs;
       }
     }
-    const amp = peak * usableHeight;
+    const amp = peak * usableHeight * preampScale;
     const xPos = x + 0.5;
     ctx.moveTo(xPos, mid - amp);
     ctx.lineTo(xPos, mid + amp);
