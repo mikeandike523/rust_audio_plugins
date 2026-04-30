@@ -4,9 +4,21 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 mod editor;
+mod string_physics;
+
+use string_physics::StringPhysics;
+
+const PITCH_BEND_DEPTH: f64 = 2.0;
+
+fn midi_to_freq(note: u8, bend_semitones: f64) -> f64 {
+    440.0 * 2.0_f64.powf((note as f64 + bend_semitones - 69.0) / 12.0)
+}
 
 struct StringSim {
-    params: Arc<StringSimParams>,
+    params:               Arc<StringSimParams>,
+    physics:              Option<StringPhysics>,
+    current_note:         Option<u8>,
+    pitch_bend_semitones: f64,
 }
 
 #[derive(Params)]
@@ -18,7 +30,10 @@ pub(crate) struct StringSimParams {
 impl Default for StringSim {
     fn default() -> Self {
         Self {
-            params: Arc::new(StringSimParams::default()),
+            params:               Arc::new(StringSimParams::default()),
+            physics:              None,
+            current_note:         None,
+            pitch_bend_semitones: 0.0,
         }
     }
 }
@@ -38,19 +53,13 @@ impl Plugin for StringSim {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(2),
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        },
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(1),
-            main_output_channels: NonZeroU32::new(1),
-            ..AudioIOLayout::const_default()
-        },
-    ];
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
+        main_input_channels: None,
+        main_output_channels: NonZeroU32::new(2),
+        ..AudioIOLayout::const_default()
+    }];
 
+    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -67,18 +76,58 @@ impl Plugin for StringSim {
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
-        _buffer_config: &BufferConfig,
+        buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        self.physics = Some(StringPhysics::new(buffer_config.sample_rate));
         true
     }
 
     fn process(
         &mut self,
-        _buffer: &mut Buffer,
+        buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Drain all MIDI events before the sample loop.
+        while let Some(event) = context.next_event() {
+            match event {
+                NoteEvent::NoteOn { note, velocity, .. } => {
+                    self.current_note = Some(note);
+                    let freq = midi_to_freq(note, self.pitch_bend_semitones);
+                    if let Some(physics) = &mut self.physics {
+                        physics.set_pitch(freq);
+                        physics.pluck((velocity * 127.0) as u8);
+                    }
+                }
+                NoteEvent::NoteOff { note, .. } => {
+                    if self.current_note == Some(note) {
+                        // Let ring — no explicit note-off action.
+                    }
+                }
+                NoteEvent::MidiPitchBend { value, .. } => {
+                    self.pitch_bend_semitones = (value as f64 - 0.5) * 2.0 * PITCH_BEND_DEPTH;
+                    if let Some(note) = self.current_note {
+                        let freq = midi_to_freq(note, self.pitch_bend_semitones);
+                        if let Some(physics) = &mut self.physics {
+                            physics.set_pitch(freq);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(physics) = &mut self.physics {
+            for samples in buffer.iter_samples() {
+                physics.step();
+                let out = physics.output();
+                for s in samples {
+                    *s = out;
+                }
+            }
+        }
+
         ProcessStatus::Normal
     }
 }
