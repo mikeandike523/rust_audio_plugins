@@ -1,7 +1,7 @@
 use nih_plug::prelude::*;
 use nih_plug_iced::IcedState;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 mod editor;
 mod string_physics;
@@ -9,9 +9,23 @@ mod string_physics;
 use string_physics::StringPhysics;
 
 const PITCH_BEND_DEPTH: f64 = 2.0;
+// Update vis state every N samples (≈5.8 ms at 44.1 kHz — fast enough for 60 fps GUI).
+const VIS_UPDATE_PERIOD: u32 = 256;
 
 fn midi_to_freq(note: u8, bend_semitones: f64) -> f64 {
     440.0 * 2.0_f64.powf((note as f64 + bend_semitones - 69.0) / 12.0)
+}
+
+// Shared string displacement state for the GUI canvas.
+pub(crate) struct VisState {
+    pub y: Vec<f32>,
+    pub effective_end: usize,
+}
+
+impl Default for VisState {
+    fn default() -> Self {
+        Self { y: vec![0.0; 260], effective_end: 0 }
+    }
 }
 
 struct StringSim {
@@ -19,12 +33,42 @@ struct StringSim {
     physics:              Option<StringPhysics>,
     current_note:         Option<u8>,
     pitch_bend_semitones: f64,
+    sample_rate:          f32,
+    vis_state:            Arc<Mutex<VisState>>,
+    vis_counter:          u32,
 }
 
 #[derive(Params)]
 pub(crate) struct StringSimParams {
     #[persist = "editor-state"]
     editor_state: Arc<IcedState>,
+
+    #[id = "tension"]
+    pub tension: FloatParam,
+
+    #[id = "spring_k"]
+    pub spring_k: FloatParam,
+
+    #[id = "bending_ei"]
+    pub bending_ei: FloatParam,
+
+    #[id = "interior_damp"]
+    pub interior_damp: FloatParam,
+
+    #[id = "endpoint_damp"]
+    pub endpoint_damp: FloatParam,
+
+    #[id = "pickup_pos"]
+    pub pickup_pos: FloatParam,
+
+    #[id = "pluck_pos"]
+    pub pluck_pos: FloatParam,
+
+    #[id = "output_gain"]
+    pub output_gain: FloatParam,
+
+    #[id = "node_count"]
+    pub node_count: IntParam,
 }
 
 impl Default for StringSim {
@@ -34,6 +78,9 @@ impl Default for StringSim {
             physics:              None,
             current_note:         None,
             pitch_bend_semitones: 0.0,
+            sample_rate:          44100.0,
+            vis_state:            Arc::new(Mutex::new(VisState::default())),
+            vis_counter:          0,
         }
     }
 }
@@ -42,6 +89,47 @@ impl Default for StringSimParams {
     fn default() -> Self {
         Self {
             editor_state: editor::default_state(),
+            tension: FloatParam::new(
+                "Tension",
+                40.0,
+                FloatRange::Linear { min: 5.0, max: 200.0 },
+            ),
+            spring_k: FloatParam::new(
+                "Spring K",
+                30_000.0,
+                FloatRange::Skewed { min: 100.0, max: 200_000.0, factor: 2.0 },
+            ),
+            bending_ei: FloatParam::new(
+                "Bending EI",
+                3e-8,
+                FloatRange::Skewed { min: 0.0, max: 1e-7, factor: 2.0 },
+            ),
+            interior_damp: FloatParam::new(
+                "Int. Damp",
+                0.25,
+                FloatRange::Linear { min: 0.0, max: 3.0 },
+            ),
+            endpoint_damp: FloatParam::new(
+                "End Damp",
+                0.75,
+                FloatRange::Linear { min: 0.0, max: 3.0 },
+            ),
+            pickup_pos: FloatParam::new(
+                "Pickup Pos",
+                0.15,
+                FloatRange::Linear { min: 0.05, max: 0.95 },
+            ),
+            pluck_pos: FloatParam::new(
+                "Pluck Pos",
+                1.0 / 3.0,
+                FloatRange::Linear { min: 0.05, max: 0.95 },
+            ),
+            output_gain: FloatParam::new(
+                "Output Gain",
+                2.5,
+                FloatRange::Skewed { min: 0.01, max: 20.0, factor: 2.0 },
+            ),
+            node_count: IntParam::new("Nodes", 142, IntRange::Linear { min: 10, max: 260 }),
         }
     }
 }
@@ -70,7 +158,11 @@ impl Plugin for StringSim {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.params.editor_state.clone())
+        editor::create(
+            self.params.clone(),
+            self.vis_state.clone(),
+            self.params.editor_state.clone(),
+        )
     }
 
     fn initialize(
@@ -79,7 +171,14 @@ impl Plugin for StringSim {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.physics = Some(StringPhysics::new(buffer_config.sample_rate));
+        self.sample_rate = buffer_config.sample_rate;
+        let n = self.params.node_count.value() as usize;
+        self.physics = Some(StringPhysics::new_with_n(self.sample_rate, n));
+        // Pre-size vis_state.y to the maximum node count so no allocation in process().
+        if let Ok(mut vis) = self.vis_state.lock() {
+            vis.y.resize(n.max(260), 0.0);
+            vis.effective_end = n.saturating_sub(2);
+        }
         true
     }
 
@@ -89,16 +188,36 @@ impl Plugin for StringSim {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Rebuild physics if node_count changed (restarts simulation).
+        let desired_n = self.params.node_count.value() as usize;
+        if self.physics.as_ref().map_or(true, |p| p.n_total() != desired_n) {
+            self.physics = Some(StringPhysics::new_with_n(self.sample_rate, desired_n));
+            self.current_note = None;
+        }
+
+        let physics = match self.physics.as_mut() {
+            Some(p) => p,
+            None => return ProcessStatus::Normal,
+        };
+
+        // Sync all continuously-variable params every block (cheap assignments).
+        physics.set_tension(self.params.tension.value() as f64);
+        physics.set_spring_k(self.params.spring_k.value() as f64);
+        physics.set_bending_ei(self.params.bending_ei.value() as f64);
+        physics.set_interior_damp(self.params.interior_damp.value() as f64);
+        physics.set_endpoint_damp(self.params.endpoint_damp.value() as f64);
+        physics.set_pickup_fraction(self.params.pickup_pos.value() as f64);
+        physics.set_pluck_fraction(self.params.pluck_pos.value() as f64);
+        physics.set_output_gain(self.params.output_gain.value() as f64);
+
         // Drain all MIDI events before the sample loop.
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { note, velocity, .. } => {
                     self.current_note = Some(note);
                     let freq = midi_to_freq(note, self.pitch_bend_semitones);
-                    if let Some(physics) = &mut self.physics {
-                        physics.set_pitch(freq);
-                        physics.pluck((velocity * 127.0) as u8);
-                    }
+                    physics.set_pitch(freq);
+                    physics.pluck((velocity * 127.0) as u8);
                 }
                 NoteEvent::NoteOff { note, .. } => {
                     if self.current_note == Some(note) {
@@ -109,21 +228,32 @@ impl Plugin for StringSim {
                     self.pitch_bend_semitones = (value as f64 - 0.5) * 2.0 * PITCH_BEND_DEPTH;
                     if let Some(note) = self.current_note {
                         let freq = midi_to_freq(note, self.pitch_bend_semitones);
-                        if let Some(physics) = &mut self.physics {
-                            physics.set_pitch(freq);
-                        }
+                        physics.set_pitch(freq);
                     }
                 }
                 _ => {}
             }
         }
 
-        if let Some(physics) = &mut self.physics {
-            for samples in buffer.iter_samples() {
-                physics.step();
-                let out = physics.output();
-                for s in samples {
-                    *s = out;
+        for samples in buffer.iter_samples() {
+            physics.step();
+            let out = physics.output();
+            for s in samples {
+                *s = out;
+            }
+
+            // Periodically copy string displacement into the shared vis buffer.
+            self.vis_counter += 1;
+            if self.vis_counter >= VIS_UPDATE_PERIOD {
+                self.vis_counter = 0;
+                if let Ok(mut vis) = self.vis_state.try_lock() {
+                    let eff = physics.effective_end();
+                    vis.effective_end = eff;
+                    let src = physics.y_slice();
+                    let copy_len = (eff + 1).min(vis.y.len());
+                    for i in 0..copy_len {
+                        vis.y[i] = src[i] as f32;
+                    }
                 }
             }
         }
