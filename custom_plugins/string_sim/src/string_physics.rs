@@ -31,6 +31,7 @@ pub struct StringPhysics {
     sample_rate:        f64,
     effective_end:      usize,
     pickup_index:       usize,
+    desired_freq:       Option<f64>,
     y:       Vec<f64>,
     vy:      Vec<f64>,
     ay:      Vec<f64>,
@@ -76,6 +77,7 @@ impl StringPhysics {
             sample_rate: sr,
             effective_end,
             pickup_index,
+            desired_freq: None,
             y:       vec![0.0; n_total],
             vy:      vec![0.0; n_total],
             ay:      vec![0.0; n_total],
@@ -97,6 +99,7 @@ impl StringPhysics {
 
     pub fn set_tension(&mut self, v: f64) {
         self.base_tension = v;
+        self.c_wave = (v / MU).sqrt();
     }
     pub fn set_spring_k(&mut self, v: f64) {
         self.spring_k = v;
@@ -142,6 +145,7 @@ impl StringPhysics {
     // --- Core methods ---
 
     pub fn set_pitch(&mut self, freq_hz: f64) {
+        self.desired_freq = Some(freq_hz);
         self.effective_end =
             freq_to_effective_end(freq_hz, self.c_wave, self.seg_len, self.n_total);
         let idx = (self.pickup_fraction * self.effective_end as f64).round() as usize;
@@ -149,6 +153,17 @@ impl StringPhysics {
         let eff = self.effective_end;
         self.y[eff..].fill(0.0);
         self.vy[eff..].fill(0.0);
+    }
+
+    /// Call once per block after all params are applied. Repositions the fret so the
+    /// resonant frequency stays at the desired pitch regardless of param changes.
+    pub fn recompute_fret(&mut self) {
+        if let Some(freq) = self.desired_freq {
+            self.effective_end =
+                freq_to_effective_end(freq, self.c_wave, self.seg_len, self.n_total);
+            let idx = (self.pickup_fraction * self.effective_end as f64).round() as usize;
+            self.pickup_index = idx.clamp(1, self.effective_end.saturating_sub(1).max(1));
+        }
     }
 
     pub fn pluck(&mut self, velocity: u8) {

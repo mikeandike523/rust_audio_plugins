@@ -210,6 +210,9 @@ impl Plugin for StringSim {
         physics.set_pluck_fraction(self.params.pluck_pos.value() as f64);
         physics.set_output_gain(self.params.output_gain.value() as f64);
 
+        // Reposition fret so desired pitch is maintained under current param set.
+        physics.recompute_fret();
+
         // Drain all MIDI events before the sample loop.
         while let Some(event) = context.next_event() {
             match event {
