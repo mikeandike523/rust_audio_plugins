@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 nih_plug = { path = "../..", features = ["assert_process_allocs"] }
 nih_plug_iced = { path = "../../nih_plug_iced", features = ["opengl_canvas"] }
 atomic_float = "0.1"
+tune = "0.34.0"
+serde = { version = "1.0", features = ["derive"] }
+tinyfiledialogs = "3.9.1"

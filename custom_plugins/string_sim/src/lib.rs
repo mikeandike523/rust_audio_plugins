@@ -5,8 +5,10 @@ use std::sync::{Arc, Mutex};
 
 mod editor;
 mod string_physics;
+mod tuning;
 
 use string_physics::StringPhysics;
+use tuning::{TuningFile, TuningState};
 
 const PITCH_BEND_DEPTH: f64 = 2.0;
 // Update vis state every N samples (≈5.8 ms at 44.1 kHz — fast enough for 60 fps GUI).
@@ -14,6 +16,15 @@ const VIS_UPDATE_PERIOD: u32 = 256;
 
 fn midi_to_freq(note: u8, bend_semitones: f64) -> f64 {
     440.0 * 2.0_f64.powf((note as f64 + bend_semitones - 69.0) / 12.0)
+}
+
+fn tuned_freq(tuning: &TuningState, note: u8, bend_semitones: f64) -> f64 {
+    if tuning.status.active {
+        let base = tuning.frequency_for_note(note as f32) as f64;
+        base * 2.0_f64.powf(bend_semitones / 12.0)
+    } else {
+        midi_to_freq(note, bend_semitones)
+    }
 }
 
 // Shared string displacement state for the GUI canvas.
@@ -36,6 +47,7 @@ struct StringSim {
     sample_rate:          f32,
     vis_state:            Arc<Mutex<VisState>>,
     vis_counter:          u32,
+    tuning_state:         Arc<Mutex<TuningState>>,
 }
 
 #[derive(Params)]
@@ -69,6 +81,12 @@ pub(crate) struct StringSimParams {
 
     #[id = "node_count"]
     pub node_count: IntParam,
+
+    #[persist = "scl_file"]
+    pub scl_file: Arc<Mutex<Option<TuningFile>>>,
+
+    #[persist = "kbm_file"]
+    pub kbm_file: Arc<Mutex<Option<TuningFile>>>,
 }
 
 impl Default for StringSim {
@@ -81,6 +99,7 @@ impl Default for StringSim {
             sample_rate:          44100.0,
             vis_state:            Arc::new(Mutex::new(VisState::default())),
             vis_counter:          0,
+            tuning_state:         Arc::new(Mutex::new(TuningState::from_files(None, None))),
         }
     }
 }
@@ -130,6 +149,8 @@ impl Default for StringSimParams {
                 FloatRange::Skewed { min: 0.01, max: 20.0, factor: 2.0 },
             ),
             node_count: IntParam::new("Nodes", 142, IntRange::Linear { min: 10, max: 260 }),
+            scl_file: Arc::new(Mutex::new(None)),
+            kbm_file: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -161,6 +182,7 @@ impl Plugin for StringSim {
         editor::create(
             self.params.clone(),
             self.vis_state.clone(),
+            self.tuning_state.clone(),
             self.params.editor_state.clone(),
         )
     }
@@ -179,6 +201,10 @@ impl Plugin for StringSim {
             vis.y.resize(n.max(260), 0.0);
             vis.effective_end = n.saturating_sub(2);
         }
+        // Rebuild tuning state from persisted files.
+        let scl = self.params.scl_file.lock().unwrap().clone();
+        let kbm = self.params.kbm_file.lock().unwrap().clone();
+        *self.tuning_state.lock().unwrap() = TuningState::from_files(scl.as_ref(), kbm.as_ref());
         true
     }
 
@@ -213,12 +239,18 @@ impl Plugin for StringSim {
         // Reposition fret so desired pitch is maintained under current param set.
         physics.recompute_fret();
 
+        // Clone tuning state once per block (cheap — editor rarely changes it).
+        let tuning = self.tuning_state
+            .try_lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| TuningState::from_files(None, None));
+
         // Drain all MIDI events before the sample loop.
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { note, velocity, .. } => {
                     self.current_note = Some(note);
-                    let freq = midi_to_freq(note, self.pitch_bend_semitones);
+                    let freq = tuned_freq(&tuning, note, self.pitch_bend_semitones);
                     physics.set_pitch(freq);
                     physics.pluck((velocity * 127.0) as u8);
                 }
@@ -230,7 +262,7 @@ impl Plugin for StringSim {
                 NoteEvent::MidiPitchBend { value, .. } => {
                     self.pitch_bend_semitones = (value as f64 - 0.5) * 2.0 * PITCH_BEND_DEPTH;
                     if let Some(note) = self.current_note {
-                        let freq = midi_to_freq(note, self.pitch_bend_semitones);
+                        let freq = tuned_freq(&tuning, note, self.pitch_bend_semitones);
                         physics.set_pitch(freq);
                     }
                 }
