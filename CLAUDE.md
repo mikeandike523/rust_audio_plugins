@@ -61,3 +61,19 @@ git log --oneline --first-parent -20
 ```
 
 Use `--graph` to spot merge commits and identify where unrelated work was folded in, then use `--first-parent` to filter down to what was actually developed on this branch. This helps distinguish the plugin's own progress from incidental merges.
+
+## Validating plugin changes
+
+After making changes to a plugin, run both of these checks before considering the work done:
+
+```bash
+# 1. Build the web GUI (if the plugin has one)
+cd custom_plugins/<plugin_name>/web-gui && pnpm run build
+
+# 2. Compile and bundle the Rust release build (from repo root)
+pnpm run <plugin_name>:rust:bundle-release
+```
+
+Both must succeed with no errors (pre-existing warnings in nih_plug / nih_plug_webview are fine to ignore).
+
+If the bundle step fails with "cannot overwrite executable", the plugin is loaded in the DAW. The user will close the DAW and re-run the bundle manually — no action needed from Claude.

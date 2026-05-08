@@ -125,6 +125,7 @@ pub struct TunableSampler {
     sample_clock: u64,
     pitch_bend: f32,
     remote_logger: RemoteLogger,
+    resample_was_in_progress: bool,
 }
 
 impl Default for TunableSampler {
@@ -152,6 +153,7 @@ impl Default for TunableSampler {
             sample_clock: 0,
             pitch_bend: 0.5,
             remote_logger: RemoteLogger::new(9099),
+            resample_was_in_progress: false,
         }
     }
 }
@@ -284,17 +286,27 @@ impl Plugin for TunableSampler {
         let scl_file = self.params.scl_file.lock().unwrap().clone();
         let kbm_file = self.params.kbm_file.lock().unwrap().clone();
         *self.tuning_state.lock().unwrap() = TuningState::from_files(scl_file.as_ref(), kbm_file.as_ref());
-        if let Ok(sample) = load_runtime_sample(
-            &self.params,
-            self.sample_rate_hz.load(Ordering::Relaxed),
-        ) {
-            *self.runtime_sample.lock().unwrap() = sample;
+        match load_runtime_sample(&self.params, self.sample_rate_hz.load(Ordering::Relaxed)) {
+            Ok(sample) => {
+                *self.runtime_sample.lock().unwrap() = sample;
+            }
+            Err(_) => {}
+        }
+        // If we couldn't load a resample at this rate, request one so process() can
+        // trigger the resample task even when the editor is closed (e.g. during render).
+        if self.runtime_sample.lock().map(|g| g.is_none()).unwrap_or(false) {
+            if let Some(s_dir) = get_sample_dir(&self.params.cache_dir, &self.params.sample_uuid) {
+                if sample_cache_exists(&s_dir) {
+                    self.resample_requested.store(true, Ordering::Relaxed);
+                }
+            }
         }
         for voice in &mut self.voices {
             *voice = Voice::idle();
         }
         self.pitch_bend = 0.5;
         self.sample_clock = 0;
+        self.resample_was_in_progress = false;
         true
     }
 
@@ -313,6 +325,45 @@ impl Plugin for TunableSampler {
                 *guard = None;
             }
         }
+
+        // Mirror the editor's resample trigger so render (no editor) also works.
+        if self.resample_requested.load(Ordering::Relaxed)
+            && !self.resample_in_progress.load(Ordering::Relaxed)
+        {
+            if let Some(s_dir) =
+                get_sample_dir(&self.params.cache_dir, &self.params.sample_uuid)
+            {
+                let target_rate = self.sample_rate_hz.load(Ordering::Relaxed);
+                if target_rate > 0 && sample_cache_exists(&s_dir) {
+                    self.resample_requested.store(false, Ordering::Relaxed);
+                    let force = self.resample_force.swap(false, Ordering::Relaxed);
+                    self.resample_in_progress.store(true, Ordering::Relaxed);
+                    spawn_resample_task(
+                        s_dir,
+                        target_rate,
+                        self.resample_quality_input.load(Ordering::Relaxed),
+                        force,
+                        self.resample_in_progress.clone(),
+                        self.resample_events.clone(),
+                        self.resample_events_dirty.clone(),
+                    );
+                }
+            }
+        }
+
+        // Detect resample completion and reload runtime_sample without needing the editor.
+        let now_in_progress = self.resample_in_progress.load(Ordering::Relaxed);
+        if self.resample_was_in_progress && !now_in_progress {
+            if let Ok(sample) = load_runtime_sample(
+                &self.params,
+                self.sample_rate_hz.load(Ordering::Relaxed),
+            ) {
+                if let Ok(mut guard) = self.runtime_sample.try_lock() {
+                    *guard = sample;
+                }
+            }
+        }
+        self.resample_was_in_progress = now_in_progress;
 
         let mut events: Vec<NoteEvent<()>> = Vec::new();
         while let Some(e) = context.next_event() {
