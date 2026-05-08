@@ -7,7 +7,9 @@ mod editor;
 mod string_physics;
 mod tuning;
 
-use string_physics::StringPhysics;
+use string_physics::{
+    StringPhysics, STRING_LENGTH_DEFAULT, STRING_LENGTH_MAX, STRING_LENGTH_MIN,
+};
 use tuning::{TuningFile, TuningState};
 
 const PITCH_BEND_DEPTH: f64 = 2.0;
@@ -82,6 +84,9 @@ pub(crate) struct StringSimParams {
     #[id = "node_count"]
     pub node_count: IntParam,
 
+    #[id = "string_length"]
+    pub string_length: FloatParam,
+
     #[persist = "scl_file"]
     pub scl_file: Arc<Mutex<Option<TuningFile>>>,
 
@@ -149,6 +154,18 @@ impl Default for StringSimParams {
                 FloatRange::Skewed { min: 0.01, max: 20.0, factor: 2.0 },
             ),
             node_count: IntParam::new("Nodes", 142, IntRange::Linear { min: 10, max: 260 }),
+            // Log bounds (LN_MIN/LN_MAX) stored in string_physics for reference; skew factor 0.35
+            // approximates a true log scale where normalized 0.5 ≈ geometric mean ≈ 0.316 m.
+            string_length: FloatParam::new(
+                "String Length",
+                STRING_LENGTH_DEFAULT as f32,
+                FloatRange::Skewed {
+                    min: STRING_LENGTH_MIN as f32,
+                    max: STRING_LENGTH_MAX as f32,
+                    factor: 0.35,
+                },
+            )
+            .with_unit(" m"),
             scl_file: Arc::new(Mutex::new(None)),
             kbm_file: Arc::new(Mutex::new(None)),
         }
@@ -227,6 +244,7 @@ impl Plugin for StringSim {
         };
 
         // Sync all continuously-variable params every block (cheap assignments).
+        physics.set_string_length(self.params.string_length.value() as f64);
         physics.set_tension(self.params.tension.value() as f64);
         physics.set_spring_k(self.params.spring_k.value() as f64);
         physics.set_bending_ei(self.params.bending_ei.value() as f64);

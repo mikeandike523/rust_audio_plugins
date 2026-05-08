@@ -13,8 +13,16 @@ const OUTPUT_GAIN_DEFAULT: f64 = 2.5;
 const LOWEST_MIDI_NOTE: u8 = 40;
 const MAX_SEG_LENGTH: f64 = 0.005;
 
+pub const STRING_LENGTH_DEFAULT: f64 = 1.0;
+pub const STRING_LENGTH_MIN: f64 = 0.05;
+pub const STRING_LENGTH_MAX: f64 = 2.0;
+// Precomputed log bounds for the logarithmic parameter mapping.
+pub const STRING_LENGTH_LN_MIN: f64 = -2.995732273553991; // ln(0.05)
+pub const STRING_LENGTH_LN_MAX: f64 = 0.6931471805599453; // ln(2.0)
+
 pub struct StringPhysics {
     n_total:            usize,
+    string_length:      f64,
     seg_len:            f64,
     node_mass:          f64,
     c_wave:             f64,
@@ -49,10 +57,8 @@ impl StringPhysics {
     pub fn new_with_n(sample_rate: f32, n_total: usize) -> Self {
         let n_total = n_total.max(6);
         let sr = sample_rate as f64;
-        let f_min = 440.0 * 2.0_f64.powf((LOWEST_MIDI_NOTE as f64 - 69.0) / 12.0);
         let c_wave = (TENSION_DEFAULT / MU).sqrt();
-        let l_max = c_wave / (2.0 * f_min);
-        let seg_len = l_max / (n_total - 1) as f64;
+        let seg_len = STRING_LENGTH_DEFAULT / (n_total - 1) as f64;
         let node_mass = MU * seg_len;
         let bfc = EI_DEFAULT / (seg_len * seg_len * seg_len);
         let dt = 1.0 / sr;
@@ -61,6 +67,7 @@ impl StringPhysics {
 
         Self {
             n_total,
+            string_length: STRING_LENGTH_DEFAULT,
             seg_len,
             node_mass,
             c_wave,
@@ -124,6 +131,13 @@ impl StringPhysics {
     }
     pub fn set_output_gain(&mut self, v: f64) {
         self.output_gain = v;
+    }
+    pub fn set_string_length(&mut self, v: f64) {
+        let ei = self.bfc * self.seg_len.powi(3); // recover raw EI before changing seg_len
+        self.string_length = v;
+        self.seg_len = v / (self.n_total - 1) as f64;
+        self.node_mass = MU * self.seg_len;
+        self.bfc = ei / self.seg_len.powi(3);
     }
 
     // --- Getters ---
