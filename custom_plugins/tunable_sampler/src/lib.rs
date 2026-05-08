@@ -29,7 +29,7 @@ use crate::constants::{
 use crate::params::TunableSamplerParams;
 use crate::pitch::spawn_pitch_estimate;
 use crate::remote_logging::RemoteLogger;
-use crate::resample::spawn_resample_task;
+use crate::resample::{spawn_resample_task, resample_to_file, ResampleQuality};
 use crate::types::{Action, FolderSelectionResult, PitchEvent, ResampleEvent};
 use crate::adsr::{EnvelopeParams, is_finished, value_at};
 
@@ -286,18 +286,27 @@ impl Plugin for TunableSampler {
         let scl_file = self.params.scl_file.lock().unwrap().clone();
         let kbm_file = self.params.kbm_file.lock().unwrap().clone();
         *self.tuning_state.lock().unwrap() = TuningState::from_files(scl_file.as_ref(), kbm_file.as_ref());
-        match load_runtime_sample(&self.params, self.sample_rate_hz.load(Ordering::Relaxed)) {
+        let target_rate = self.sample_rate_hz.load(Ordering::Relaxed);
+        match load_runtime_sample(&self.params, target_rate) {
             Ok(sample) => {
                 *self.runtime_sample.lock().unwrap() = sample;
             }
             Err(_) => {}
         }
-        // If we couldn't load a resample at this rate, request one so process() can
-        // trigger the resample task even when the editor is closed (e.g. during render).
+        // If no cached resample exists at this sample rate (common when the DAW renders at a
+        // different rate than playback), block here and do it synchronously. initialize() is
+        // called before any processing starts, so blocking is acceptable and ensures the first
+        // note at tick 0 is never silent.
         if self.runtime_sample.lock().map(|g| g.is_none()).unwrap_or(false) {
             if let Some(s_dir) = get_sample_dir(&self.params.cache_dir, &self.params.sample_uuid) {
                 if sample_cache_exists(&s_dir) {
-                    self.resample_requested.store(true, Ordering::Relaxed);
+                    let quality = ResampleQuality::from_u32(
+                        self.resample_quality_input.load(Ordering::Relaxed),
+                    );
+                    let _ = resample_to_file(&s_dir, target_rate, quality, false, &mut |_| {});
+                    if let Ok(sample) = load_runtime_sample(&self.params, target_rate) {
+                        *self.runtime_sample.lock().unwrap() = sample;
+                    }
                 }
             }
         }

@@ -168,6 +168,71 @@ pub fn queue_resample_event(
     dirty.store(true, Ordering::Relaxed);
 }
 
+/// Perform a resample synchronously, writing the result files to `cache_folder`.
+///
+/// `progress_cb` receives values in [0, 1] during the rubato pass.
+/// Pass `&mut |_| {}` when progress reporting is not needed (e.g. during initialize).
+pub fn resample_to_file(
+    cache_folder: &Path,
+    target_sample_rate: u32,
+    quality: ResampleQuality,
+    force: bool,
+    progress_cb: &mut impl FnMut(f32),
+) -> Result<String, String> {
+    if target_sample_rate == 0 {
+        return Err("Project sample rate cannot be zero.".to_string());
+    }
+
+    let (metadata, data) = load_sample_data(cache_folder)?;
+
+    if !force {
+        if let Some(existing) = load_resampled_metadata(cache_folder)? {
+            if existing.sample_rate == target_sample_rate
+                && existing.quality == quality.as_u32()
+                && existing.source_sample_rate == metadata.sample_rate
+                && existing.source_frames == metadata.frames
+            {
+                return Ok("Resample cache is already up to date.".to_string());
+            }
+        }
+    }
+
+    let channels = metadata.channels as usize;
+    let output = resample_rubato(
+        &data,
+        channels,
+        metadata.sample_rate,
+        target_sample_rate,
+        quality,
+        progress_cb,
+    )?;
+
+    let output_frames = (output.len() / channels) as u32;
+
+    let array_path = cache_folder.join("resampled.array");
+    write_f32_interleaved(&array_path, &output)?;
+
+    let json_path = cache_folder.join("resampled.json");
+    let metadata_json = json!({
+        "name": metadata.name,
+        "sample_rate": target_sample_rate,
+        "channels": metadata.channels,
+        "frames": output_frames,
+        "length_seconds": output_frames as f32 / target_sample_rate as f32,
+        "format": "f32le",
+        "layout": "interleaved",
+        "source_sample_rate": metadata.sample_rate,
+        "source_frames": metadata.frames,
+        "quality": quality.as_u32(),
+    });
+    let json_bytes = serde_json::to_vec_pretty(&metadata_json)
+        .map_err(|err| format!("Failed to serialize resampled.json: {err}"))?;
+    std::fs::write(&json_path, json_bytes)
+        .map_err(|err| format!("Failed to write resampled.json: {err}"))?;
+
+    Ok("Resample complete.".to_string())
+}
+
 pub fn spawn_resample_task(
     cache_folder: PathBuf,
     target_sample_rate: u32,
@@ -180,78 +245,29 @@ pub fn spawn_resample_task(
     std::thread::spawn(move || {
         let quality = ResampleQuality::from_u32(quality);
 
-        let result = (|| -> Result<String, String> {
-            if target_sample_rate == 0 {
-                return Err("Project sample rate cannot be zero.".to_string());
-            }
+        queue_resample_event(
+            &events,
+            &events_dirty,
+            ResampleEvent::Started {
+                label: format!("Resampling to {target_sample_rate} Hz ({})", quality.label()),
+            },
+        );
 
-            queue_resample_event(
-                &events,
-                &events_dirty,
-                ResampleEvent::Started {
-                    label: format!(
-                        "Resampling to {target_sample_rate} Hz ({})",
-                        quality.label()
-                    ),
-                },
-            );
-
-            let (metadata, data) = load_sample_data(&cache_folder)?;
-
-            // Skip if the cached resample is still valid (unless the caller forced a fresh run).
-            if !force {
-                if let Some(existing) = load_resampled_metadata(&cache_folder)? {
-                    if existing.sample_rate == target_sample_rate
-                        && existing.quality == quality.as_u32()
-                        && existing.source_sample_rate == metadata.sample_rate
-                        && existing.source_frames == metadata.frames
-                    {
-                        return Ok("Resample cache is already up to date.".to_string());
-                    }
-                }
-            }
-
-            let channels = metadata.channels as usize;
-            let output = resample_rubato(
-                &data,
-                channels,
-                metadata.sample_rate,
-                target_sample_rate,
-                quality,
-                |progress| {
-                    queue_resample_event(
-                        &events,
-                        &events_dirty,
-                        ResampleEvent::Progress { progress },
-                    );
-                },
-            )?;
-
-            let output_frames = (output.len() / channels) as u32;
-
-            let array_path = cache_folder.join("resampled.array");
-            write_f32_interleaved(&array_path, &output)?;
-
-            let json_path = cache_folder.join("resampled.json");
-            let metadata_json = json!({
-                "name": metadata.name,
-                "sample_rate": target_sample_rate,
-                "channels": metadata.channels,
-                "frames": output_frames,
-                "length_seconds": output_frames as f32 / target_sample_rate as f32,
-                "format": "f32le",
-                "layout": "interleaved",
-                "source_sample_rate": metadata.sample_rate,
-                "source_frames": metadata.frames,
-                "quality": quality.as_u32(),
-            });
-            let json_bytes = serde_json::to_vec_pretty(&metadata_json)
-                .map_err(|err| format!("Failed to serialize resampled.json: {err}"))?;
-            std::fs::write(&json_path, json_bytes)
-                .map_err(|err| format!("Failed to write resampled.json: {err}"))?;
-
-            Ok("Resample complete.".to_string())
-        })();
+        let events_ref = events.clone();
+        let events_dirty_ref = events_dirty.clone();
+        let result = resample_to_file(
+            &cache_folder,
+            target_sample_rate,
+            quality,
+            force,
+            &mut move |progress| {
+                queue_resample_event(
+                    &events_ref,
+                    &events_dirty_ref,
+                    ResampleEvent::Progress { progress },
+                );
+            },
+        );
 
         match result {
             Ok(message) => {
