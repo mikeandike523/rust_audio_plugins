@@ -468,6 +468,52 @@ fn resample_sinc(input: &[f32], channels: usize, in_rate: u32, out_rate: u32) ->
 // Background resample task for one pad
 // ---------------------------------------------------------------------------
 
+/// Resample the raw sample for `pad_dir` to `project_rate`, write the result
+/// files, and return the ready-to-play `PadData`. Runs synchronously — call
+/// from `initialize()` to guarantee the pad is ready before the first buffer.
+fn resample_pad_to_file(dir: &std::path::Path, project_rate: u32) -> Result<PadData, String> {
+    let meta_bytes = std::fs::read(dir.join("sample.json"))
+        .map_err(|e| format!("sample.json missing: {e}"))?;
+    let meta: RawMeta = serde_json::from_slice(&meta_bytes)
+        .map_err(|e| format!("sample.json parse: {e}"))?;
+    let array_bytes = std::fs::read(dir.join("sample.array"))
+        .map_err(|e| format!("sample.array missing: {e}"))?;
+    let mut raw: Vec<f32> = Vec::with_capacity(array_bytes.len() / 4);
+    for chunk in array_bytes.chunks_exact(4) {
+        raw.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    let resampled = resample_sinc(&raw, meta.channels as usize, meta.sample_rate, project_rate);
+    let out_frames = resampled.len() / meta.channels as usize;
+
+    let mut out_bytes = Vec::with_capacity(resampled.len() * 4);
+    for &v in &resampled {
+        out_bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    std::fs::write(dir.join("resampled.array"), &out_bytes)
+        .map_err(|e| format!("write resampled.array: {e}"))?;
+
+    let rmeta = json!({
+        "name": meta.name,
+        "sample_rate": project_rate,
+        "channels": meta.channels,
+        "frames": out_frames,
+        "source_sample_rate": meta.sample_rate,
+    });
+    std::fs::write(
+        dir.join("resampled.json"),
+        serde_json::to_vec_pretty(&rmeta).unwrap(),
+    )
+    .map_err(|e| format!("write resampled.json: {e}"))?;
+
+    Ok(PadData {
+        name: meta.name,
+        channels: meta.channels as usize,
+        frames: out_frames,
+        data: resampled,
+    })
+}
+
 fn spawn_pad_resample(
     cache_dir: PathBuf,
     uuid: String,
@@ -479,50 +525,8 @@ fn spawn_pad_resample(
     ui_dirty: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        let result = (|| -> Result<PadData, String> {
-            let dir = pad_dir(&cache_dir, &uuid);
-            let meta_bytes = std::fs::read(dir.join("sample.json"))
-                .map_err(|e| format!("sample.json missing: {e}"))?;
-            let meta: RawMeta = serde_json::from_slice(&meta_bytes)
-                .map_err(|e| format!("sample.json parse: {e}"))?;
-            let array_bytes = std::fs::read(dir.join("sample.array"))
-                .map_err(|e| format!("sample.array missing: {e}"))?;
-            let mut raw: Vec<f32> = Vec::with_capacity(array_bytes.len() / 4);
-            for chunk in array_bytes.chunks_exact(4) {
-                raw.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-            }
-
-            let resampled =
-                resample_sinc(&raw, meta.channels as usize, meta.sample_rate, project_rate);
-            let out_frames = resampled.len() / meta.channels as usize;
-
-            let mut out_bytes = Vec::with_capacity(resampled.len() * 4);
-            for &v in &resampled {
-                out_bytes.extend_from_slice(&v.to_le_bytes());
-            }
-            std::fs::write(dir.join("resampled.array"), &out_bytes)
-                .map_err(|e| format!("write resampled.array: {e}"))?;
-
-            let rmeta = json!({
-                "name": meta.name,
-                "sample_rate": project_rate,
-                "channels": meta.channels,
-                "frames": out_frames,
-                "source_sample_rate": meta.sample_rate,
-            });
-            std::fs::write(
-                dir.join("resampled.json"),
-                serde_json::to_vec_pretty(&rmeta).unwrap(),
-            )
-            .map_err(|e| format!("write resampled.json: {e}"))?;
-
-            Ok(PadData {
-                name: meta.name,
-                channels: meta.channels as usize,
-                frames: out_frames,
-                data: resampled,
-            })
-        })();
+        let dir = pad_dir(&cache_dir, &uuid);
+        let result = resample_pad_to_file(&dir, project_rate);
 
         resample_in_progress[pad_index].store(false, Ordering::Relaxed);
 
@@ -737,17 +741,13 @@ impl Plugin for Dispatch {
             if let Some(data) = load_resampled(&effective_dir, uuid, sr) {
                 *self.pad_data[pad_idx].lock().unwrap() = Some(data);
             } else if load_raw_meta(&effective_dir, uuid).is_some() {
-                self.resample_in_progress[pad_idx].store(true, Ordering::Relaxed);
-                spawn_pad_resample(
-                    effective_dir.clone(),
-                    uuid.clone(),
-                    sr,
-                    self.pad_data.clone(),
-                    pad_idx,
-                    self.resample_in_progress.clone(),
-                    self.ui_events.clone(),
-                    self.ui_events_dirty.clone(),
-                );
+                // No cached resample at this rate. Block here so the pad is
+                // ready before the first buffer — prevents a lost note at
+                // tick 0 during render (same fix as tunable_sampler).
+                let dir = pad_dir(&effective_dir, uuid);
+                if let Ok(data) = resample_pad_to_file(&dir, sr) {
+                    *self.pad_data[pad_idx].lock().unwrap() = Some(data);
+                }
             }
         }
 
