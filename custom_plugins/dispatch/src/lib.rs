@@ -1101,13 +1101,9 @@ impl Plugin for Dispatch {
                                 params.cache_dir.lock().unwrap().clone();
                             let effective_dir = effective_cache_dir(&cache_dir_override);
 
-                            // Ensure (or reuse) a UUID for this pad slot.
                             let uuid = {
                                 let mut uuids = params.pad_uuids.lock().unwrap();
-                                if uuids[pad_index].is_none() {
-                                    uuids[pad_index] =
-                                        Some(new_unique_cache_key(&effective_dir));
-                                }
+                                uuids[pad_index] = Some(new_unique_cache_key(&effective_dir));
                                 uuids[pad_index].clone().unwrap()
                             };
 
