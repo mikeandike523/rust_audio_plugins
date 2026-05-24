@@ -879,13 +879,9 @@ impl Plugin for TunableSampler {
                                     params.cache_dir.lock().ok().and_then(|g| g.clone());
                                 let effective_dir = effective_cache_dir(&cache_dir_override);
 
-                                // Assign a UUID on first save; reuse on subsequent saves.
                                 let uuid = {
                                     let mut uuid_guard = params.sample_uuid.lock().unwrap();
-                                    if uuid_guard.is_none() {
-                                        *uuid_guard =
-                                            Some(new_unique_cache_key(&effective_dir));
-                                    }
+                                    *uuid_guard = Some(new_unique_cache_key(&effective_dir));
                                     uuid_guard.clone().unwrap()
                                 };
 

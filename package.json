@@ -31,6 +31,9 @@
 
     "tunable_sampler_iced:rust:bundle-release":"bash scripts/package-json/tunable_sampler_iced/rust/bundle-release.sh",
 
+    "strum:rust:bundle-dev":"bash scripts/package-json/strum/rust/bundle-dev.sh",
+    "strum:rust:bundle-release":"bash scripts/package-json/strum/rust/bundle-release.sh",
+
     "string_sim:rust:bundle-release":"bash scripts/package-json/string_sim/rust/bundle-release.sh",
 
     "bootstrap-new-project": "bash __inenv python scripts/package-json/bootstrap_new_project.py",
