@@ -1,17 +1,26 @@
-use atomic_float::AtomicF32;
 use nih_plug::prelude::*;
 use nih_plug_iced::IcedState;
-use std::num::NonZeroU32;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod editor;
 
-const PEAK_METER_DECAY_MS: f64 = 150.0;
+#[derive(Debug, Clone, Copy, PartialEq, Enum)]
+pub enum StrumDirection {
+    #[name = "Up"]
+    Up,
+    #[name = "Down"]
+    Down,
+}
 
 struct Strum {
     params: Arc<StrumParams>,
-    peak_meter_decay_weight: f32,
-    peak_meter: Arc<AtomicF32>,
+    sample_rate: f32,
+    /// Queued (absolute_sample, NoteOn event) pairs waiting to fire.
+    pending: Vec<(u64, NoteEvent<()>)>,
+    /// Monotonically increasing sample counter across process() calls.
+    sample_pos: u64,
+    was_playing: bool,
 }
 
 #[derive(Params)]
@@ -19,16 +28,24 @@ pub(crate) struct StrumParams {
     #[persist = "editor-state"]
     editor_state: Arc<IcedState>,
 
-    #[id = "gain"]
-    pub gain: FloatParam,
+    #[id = "stagger_ms"]
+    pub stagger_ms: FloatParam,
+
+    /// Automatable strum direction. With SAMPLE_ACCURATE_AUTOMATION the host
+    /// delivers changes at the exact sample where notes arrive, so programming
+    /// down/up/down patterns in the piano roll works correctly.
+    #[id = "direction"]
+    pub direction: EnumParam<StrumDirection>,
 }
 
 impl Default for Strum {
     fn default() -> Self {
         Self {
             params: Arc::new(StrumParams::default()),
-            peak_meter_decay_weight: 1.0,
-            peak_meter: Arc::new(AtomicF32::new(util::MINUS_INFINITY_DB)),
+            sample_rate: 44100.0,
+            pending: Vec::new(),
+            sample_pos: 0,
+            was_playing: false,
         }
     }
 }
@@ -37,19 +54,13 @@ impl Default for StrumParams {
     fn default() -> Self {
         Self {
             editor_state: editor::default_state(),
-            gain: FloatParam::new(
-                "Gain",
-                util::db_to_gain(0.0),
-                FloatRange::Skewed {
-                    min: util::db_to_gain(-30.0),
-                    max: util::db_to_gain(30.0),
-                    factor: FloatRange::gain_skew_factor(-30.0, 30.0),
-                },
+            stagger_ms: FloatParam::new(
+                "Stagger",
+                20.0,
+                FloatRange::Linear { min: 0.0, max: 200.0 },
             )
-            .with_smoother(SmoothingStyle::Logarithmic(50.0))
-            .with_unit(" dB")
-            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
-            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            .with_unit(" ms"),
+            direction: EnumParam::new("Direction", StrumDirection::Up),
         }
     }
 }
@@ -61,19 +72,13 @@ impl Plugin for Strum {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(2),
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        },
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(1),
-            main_output_channels: NonZeroU32::new(1),
-            ..AudioIOLayout::const_default()
-        },
-    ];
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[];
 
+    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    const MIDI_OUTPUT: MidiConfig = MidiConfig::Basic;
+
+    /// Allows the host to deliver direction automation changes at the same
+    /// sample as a note-on, enabling programmable strum patterns.
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -84,11 +89,7 @@ impl Plugin for Strum {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(
-            self.params.clone(),
-            self.peak_meter.clone(),
-            self.params.editor_state.clone(),
-        )
+        editor::create(self.params.clone(), self.params.editor_state.clone())
     }
 
     fn initialize(
@@ -97,45 +98,131 @@ impl Plugin for Strum {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.peak_meter_decay_weight = 0.25f64
-            .powf((buffer_config.sample_rate as f64 * PEAK_METER_DECAY_MS / 1000.0).recip())
-            as f32;
+        self.sample_rate = buffer_config.sample_rate;
+        self.pending.clear();
+        self.sample_pos = 0;
+        self.was_playing = false;
         true
+    }
+
+    fn reset(&mut self) {
+        self.pending.clear();
+        self.sample_pos = 0;
+        self.was_playing = false;
     }
 
     fn process(
         &mut self,
         buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        for channel_samples in buffer.iter_samples() {
-            let mut amplitude = 0.0;
-            let num_samples = channel_samples.len();
+        let buf_len = buffer.samples() as u64;
+        let playing = context.transport().playing;
 
-            let gain = self.params.gain.smoothed.next();
-            for sample in channel_samples {
-                *sample *= gain;
-                amplitude += *sample;
-            }
-
-            if self.params.editor_state.is_open() {
-                amplitude = (amplitude / num_samples as f32).abs();
-                let current_peak_meter =
-                    self.peak_meter.load(std::sync::atomic::Ordering::Relaxed);
-                let new_peak_meter = if amplitude > current_peak_meter {
-                    amplitude
-                } else {
-                    current_peak_meter * self.peak_meter_decay_weight
-                        + amplitude * (1.0 - self.peak_meter_decay_weight)
-                };
-
-                self.peak_meter
-                    .store(new_peak_meter, std::sync::atomic::Ordering::Relaxed);
+        // Stop: flush pending and silence all notes downstream.
+        if self.was_playing && !playing {
+            self.pending.clear();
+            for channel in 0..16u8 {
+                for note in 0..128u8 {
+                    context.send_event(NoteEvent::NoteOff {
+                        timing: 0,
+                        voice_id: None,
+                        channel,
+                        note,
+                        velocity: 0.0,
+                    });
+                }
             }
         }
 
+        // Start: reset counter so pending offsets stay consistent.
+        if !self.was_playing && playing {
+            self.pending.clear();
+            self.sample_pos = 0;
+        }
+
+        self.was_playing = playing;
+
+        // Collect all events from the host.
+        let mut all_events: Vec<NoteEvent<()>> = Vec::new();
+        while let Some(e) = context.next_event() {
+            all_events.push(e);
+        }
+
+        // When stopped, forward everything unchanged (audition / note preview).
+        if !playing {
+            for event in all_events {
+                context.send_event(event);
+            }
+            self.sample_pos += buf_len;
+            return ProcessStatus::Normal;
+        }
+
+        let direction = self.params.direction.value();
+        let stagger_samples = self.params.stagger_ms.value() * self.sample_rate / 1000.0;
+
+        // Group NoteOn (velocity > 0) events by their timing offset.
+        // All other events (NoteOff, CC, NoteOn vel=0) forward immediately.
+        let mut note_on_groups: BTreeMap<u32, Vec<NoteEvent<()>>> = BTreeMap::new();
+        for event in all_events {
+            match &event {
+                NoteEvent::NoteOn { velocity, .. } if *velocity > 0.0 => {
+                    let t = event.timing();
+                    note_on_groups.entry(t).or_default().push(event);
+                }
+                _ => context.send_event(event),
+            }
+        }
+
+        // For each simultaneous chord: sort by pitch and push staggered NoteOns.
+        for (timing, mut chord) in note_on_groups {
+            match direction {
+                StrumDirection::Up => chord.sort_by_key(note_pitch),
+                StrumDirection::Down => chord.sort_by_key(|e| std::cmp::Reverse(note_pitch(e))),
+            }
+            for (i, event) in chord.into_iter().enumerate() {
+                let offset = (i as f32 * stagger_samples).round() as u64;
+                let fire_at = self.sample_pos + timing as u64 + offset;
+                self.pending.push((fire_at, event));
+            }
+        }
+
+        // Pending is small (≤ a few chords); sort to keep drain pass simple.
+        self.pending.sort_unstable_by_key(|(t, _)| *t);
+
+        // Emit all pending events whose fire time falls within this buffer.
+        let drain_end = self.sample_pos + buf_len;
+        let mut i = 0;
+        while i < self.pending.len() {
+            let (fire_at, _) = self.pending[i];
+            if fire_at < drain_end {
+                let (fire_at, event) = self.pending.remove(i);
+                let rel = fire_at.saturating_sub(self.sample_pos).min(buf_len - 1) as u32;
+                context.send_event(with_timing(event, rel));
+            } else {
+                i += 1;
+            }
+        }
+
+        self.sample_pos += buf_len;
         ProcessStatus::Normal
+    }
+}
+
+fn note_pitch(e: &NoteEvent<()>) -> u8 {
+    match e {
+        NoteEvent::NoteOn { note, .. } => *note,
+        _ => 0,
+    }
+}
+
+fn with_timing(e: NoteEvent<()>, timing: u32) -> NoteEvent<()> {
+    match e {
+        NoteEvent::NoteOn { voice_id, channel, note, velocity, .. } => {
+            NoteEvent::NoteOn { timing, voice_id, channel, note, velocity }
+        }
+        other => other,
     }
 }
 
@@ -144,10 +231,8 @@ impl ClapPlugin for Strum {
     const CLAP_DESCRIPTION: Option<&'static str> = Some("MIDI strum effect");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[
-        ClapFeature::NoteEffect,
-        ClapFeature::Utility,
-    ];
+    const CLAP_FEATURES: &'static [ClapFeature] =
+        &[ClapFeature::NoteEffect, ClapFeature::Utility];
 }
 
 impl Vst3Plugin for Strum {

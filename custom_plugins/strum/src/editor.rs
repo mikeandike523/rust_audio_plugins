@@ -1,32 +1,26 @@
-use atomic_float::AtomicF32;
-use nih_plug::prelude::{util, Editor, GuiContext};
+use nih_plug::prelude::{Editor, GuiContext};
 use nih_plug_iced::widgets as nih_widgets;
 use nih_plug_iced::*;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::StrumParams;
 
 pub(crate) fn default_state() -> Arc<IcedState> {
-    IcedState::from_size(300, 180)
+    IcedState::from_size(300, 220)
 }
 
 pub(crate) fn create(
     params: Arc<StrumParams>,
-    peak_meter: Arc<AtomicF32>,
     editor_state: Arc<IcedState>,
 ) -> Option<Box<dyn Editor>> {
-    create_iced_editor::<StrumEditor>(editor_state, (params, peak_meter))
+    create_iced_editor::<StrumEditor>(editor_state, params)
 }
 
 struct StrumEditor {
     params: Arc<StrumParams>,
     context: Arc<dyn GuiContext>,
-
-    peak_meter: Arc<AtomicF32>,
-
-    gain_slider_state: nih_widgets::param_slider::State,
-    peak_meter_state: nih_widgets::peak_meter::State,
+    stagger_slider_state: nih_widgets::param_slider::State,
+    direction_slider_state: nih_widgets::param_slider::State,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,20 +31,15 @@ enum Message {
 impl IcedEditor for StrumEditor {
     type Executor = executor::Default;
     type Message = Message;
-    type InitializationFlags = (Arc<StrumParams>, Arc<AtomicF32>);
+    type InitializationFlags = Arc<StrumParams>;
 
-    fn new(
-        (params, peak_meter): Self::InitializationFlags,
-        context: Arc<dyn GuiContext>,
-    ) -> (Self, Command<Self::Message>) {
+    fn new(params: Self::InitializationFlags, context: Arc<dyn GuiContext>) -> (Self, Command<Self::Message>) {
         let editor = StrumEditor {
             params,
             context,
-            peak_meter,
-            gain_slider_state: Default::default(),
-            peak_meter_state: Default::default(),
+            stagger_slider_state: Default::default(),
+            direction_slider_state: Default::default(),
         };
-
         (editor, Command::none())
     }
 
@@ -66,7 +55,6 @@ impl IcedEditor for StrumEditor {
         match message {
             Message::ParamUpdate(message) => self.handle_param_message(message),
         }
-
         Command::none()
     }
 
@@ -83,26 +71,33 @@ impl IcedEditor for StrumEditor {
                     .vertical_alignment(alignment::Vertical::Bottom),
             )
             .push(
-                Text::new("Gain")
+                Text::new("Stagger")
                     .height(20.into())
                     .width(Length::Fill)
                     .horizontal_alignment(alignment::Horizontal::Center)
                     .vertical_alignment(alignment::Vertical::Center),
             )
             .push(
-                nih_widgets::ParamSlider::new(&mut self.gain_slider_state, &self.params.gain)
-                    .map(Message::ParamUpdate),
+                nih_widgets::ParamSlider::new(
+                    &mut self.stagger_slider_state,
+                    &self.params.stagger_ms,
+                )
+                .map(Message::ParamUpdate),
             )
             .push(Space::with_height(10.into()))
             .push(
-                nih_widgets::PeakMeter::new(
-                    &mut self.peak_meter_state,
-                    util::gain_to_db(
-                        self.peak_meter
-                            .load(std::sync::atomic::Ordering::Relaxed),
-                    ),
+                Text::new("Direction")
+                    .height(20.into())
+                    .width(Length::Fill)
+                    .horizontal_alignment(alignment::Horizontal::Center)
+                    .vertical_alignment(alignment::Vertical::Center),
+            )
+            .push(
+                nih_widgets::ParamSlider::new(
+                    &mut self.direction_slider_state,
+                    &self.params.direction,
                 )
-                .hold_time(Duration::from_millis(600)),
+                .map(Message::ParamUpdate),
             )
             .into()
     }
