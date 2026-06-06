@@ -21,6 +21,7 @@ struct Strum {
     /// Monotonically increasing sample counter across process() calls.
     sample_pos: u64,
     was_playing: bool,
+    rng: fastrand::Rng,
 }
 
 #[derive(Params)]
@@ -30,6 +31,9 @@ pub(crate) struct StrumParams {
 
     #[id = "stagger_ms"]
     pub stagger_ms: FloatParam,
+
+    #[id = "randomize_ms"]
+    pub randomize_ms: FloatParam,
 
     /// Automatable strum direction. With SAMPLE_ACCURATE_AUTOMATION the host
     /// delivers changes at the exact sample where notes arrive, so programming
@@ -46,6 +50,7 @@ impl Default for Strum {
             pending: Vec::new(),
             sample_pos: 0,
             was_playing: false,
+            rng: fastrand::Rng::new(),
         }
     }
 }
@@ -58,6 +63,12 @@ impl Default for StrumParams {
                 "Stagger",
                 20.0,
                 FloatRange::Linear { min: 0.0, max: 200.0 },
+            )
+            .with_unit(" ms"),
+            randomize_ms: FloatParam::new(
+                "Randomize",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 100.0 },
             )
             .with_unit(" ms"),
             direction: EnumParam::new("Direction", StrumDirection::Up),
@@ -161,6 +172,7 @@ impl Plugin for Strum {
 
         let direction = self.params.direction.value();
         let stagger_samples = self.params.stagger_ms.value() * self.sample_rate / 1000.0;
+        let rand_half_samples = self.params.randomize_ms.value() * self.sample_rate / 1000.0 * 0.5;
 
         // Group NoteOn (velocity > 0) events by their timing offset.
         // All other events (NoteOff, CC, NoteOn vel=0) forward immediately.
@@ -182,7 +194,8 @@ impl Plugin for Strum {
                 StrumDirection::Down => chord.sort_by_key(|e| std::cmp::Reverse(note_pitch(e))),
             }
             for (i, event) in chord.into_iter().enumerate() {
-                let offset = (i as f32 * stagger_samples).round() as u64;
+                let jitter = self.rng.f32() * 2.0 * rand_half_samples - rand_half_samples;
+                let offset = (i as f32 * stagger_samples + jitter).max(0.0).round() as u64;
                 let fire_at = self.sample_pos + timing as u64 + offset;
                 self.pending.push((fire_at, event));
             }

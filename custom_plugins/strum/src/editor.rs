@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::StrumParams;
 
 pub(crate) fn default_state() -> Arc<IcedState> {
-    IcedState::from_size(300, 220)
+    IcedState::from_size(440, 420)
 }
 
 pub(crate) fn create(
@@ -20,6 +20,7 @@ struct StrumEditor {
     params: Arc<StrumParams>,
     context: Arc<dyn GuiContext>,
     stagger_slider_state: nih_widgets::param_slider::State,
+    randomize_slider_state: nih_widgets::param_slider::State,
     direction_slider_state: nih_widgets::param_slider::State,
 }
 
@@ -38,6 +39,7 @@ impl IcedEditor for StrumEditor {
             params,
             context,
             stagger_slider_state: Default::default(),
+            randomize_slider_state: Default::default(),
             direction_slider_state: Default::default(),
         };
         (editor, Command::none())
@@ -59,20 +61,24 @@ impl IcedEditor for StrumEditor {
     }
 
     fn view(&mut self) -> Element<'_, Self::Message> {
+        let label_color = Color::from_rgb8(160, 168, 200);
         Column::new()
             .align_items(Alignment::Center)
             .push(
                 Text::new("Strum")
                     .font(assets::NOTO_SANS_LIGHT)
-                    .size(32)
-                    .height(50.into())
+                    .size(44)
+                    .color(Color::from_rgb8(225, 230, 255))
+                    .height(75.into())
                     .width(Length::Fill)
                     .horizontal_alignment(alignment::Horizontal::Center)
                     .vertical_alignment(alignment::Vertical::Bottom),
             )
             .push(
                 Text::new("Stagger")
-                    .height(20.into())
+                    .size(17)
+                    .color(label_color)
+                    .height(30.into())
                     .width(Length::Fill)
                     .horizontal_alignment(alignment::Horizontal::Center)
                     .vertical_alignment(alignment::Vertical::Center),
@@ -82,12 +88,37 @@ impl IcedEditor for StrumEditor {
                     &mut self.stagger_slider_state,
                     &self.params.stagger_ms,
                 )
+                .width(Length::Units(360))
+                .height(Length::Units(40))
+                .text_size(15)
                 .map(Message::ParamUpdate),
             )
-            .push(Space::with_height(10.into()))
+            .push(Space::with_height(16.into()))
+            .push(
+                Text::new("Randomize")
+                    .size(17)
+                    .color(label_color)
+                    .height(30.into())
+                    .width(Length::Fill)
+                    .horizontal_alignment(alignment::Horizontal::Center)
+                    .vertical_alignment(alignment::Vertical::Center),
+            )
+            .push(
+                nih_widgets::ParamSlider::new(
+                    &mut self.randomize_slider_state,
+                    &self.params.randomize_ms,
+                )
+                .width(Length::Units(360))
+                .height(Length::Units(40))
+                .text_size(15)
+                .map(Message::ParamUpdate),
+            )
+            .push(Space::with_height(16.into()))
             .push(
                 Text::new("Direction")
-                    .height(20.into())
+                    .size(17)
+                    .color(label_color)
+                    .height(30.into())
                     .width(Length::Fill)
                     .horizontal_alignment(alignment::Horizontal::Center)
                     .vertical_alignment(alignment::Vertical::Center),
@@ -97,6 +128,9 @@ impl IcedEditor for StrumEditor {
                     &mut self.direction_slider_state,
                     &self.params.direction,
                 )
+                .width(Length::Units(360))
+                .height(Length::Units(40))
+                .text_size(15)
                 .map(Message::ParamUpdate),
             )
             .into()
@@ -104,9 +138,9 @@ impl IcedEditor for StrumEditor {
 
     fn background_color(&self) -> Color {
         Color {
-            r: 0.15,
-            g: 0.15,
-            b: 0.20,
+            r: 0.12,
+            g: 0.13,
+            b: 0.18,
             a: 1.0,
         }
     }

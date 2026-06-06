@@ -425,7 +425,7 @@ impl<'a, P: Param> Widget<ParamMessage, Renderer> for ParamSlider<'a, P> {
 
         let background_color =
             if is_mouse_over || self.state.drag_active || self.state.text_input_value.is_some() {
-                Color::new(0.5, 0.5, 0.5, 0.1)
+                Color::new(1.0, 1.0, 1.0, 0.07)
             } else {
                 Color::TRANSPARENT
             };
@@ -433,7 +433,7 @@ impl<'a, P: Param> Widget<ParamMessage, Renderer> for ParamSlider<'a, P> {
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
-                border_color: Color::BLACK,
+                border_color: Color::from_rgb8(70, 80, 115),
                 border_width: BORDER_WIDTH,
                 border_radius: 0.0,
             },
@@ -462,7 +462,7 @@ impl<'a, P: Param> Widget<ParamMessage, Renderer> for ParamSlider<'a, P> {
             );
             let fill_end_x = util::remap_rect_x_t(&bounds_without_borders, current_value);
 
-            let fill_color = Color::from_rgb8(196, 196, 196);
+            let fill_color = Color::from_rgb8(75, 150, 215);
             let fill_rect = Rectangle {
                 x: fill_start_x.min(fill_end_x),
                 width: (fill_end_x - fill_start_x).abs(),
@@ -490,13 +490,13 @@ impl<'a, P: Param> Widget<ParamMessage, Renderer> for ParamSlider<'a, P> {
                 font: self.font,
                 size: text_size,
                 bounds: text_bounds,
-                color: style.text_color,
+                color: Color::from_rgb8(205, 210, 230),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Center,
             });
 
             renderer.with_layer(fill_rect, |renderer| {
-                let filled_text_color = Color::from_rgb8(80, 80, 80);
+                let filled_text_color = Color::from_rgb8(10, 20, 45);
                 renderer.fill_text(text::Text {
                     content: &display_value,
                     font: self.font,
