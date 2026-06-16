@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 
 type PluginMessage =
   | {
@@ -22,7 +22,8 @@ type PluginMessage =
   | { type: "SampleLoaded"; padIndex: number; name: string }
   | { type: "SampleError"; padIndex: number; message: string }
   | { type: "PadName"; padIndex: number; name: string }
-  | { type: "PadCleared"; padIndex: number };
+  | { type: "PadCleared"; padIndex: number }
+  | { type: "PadHit"; padIndex: number };
 
 type PadState = { name: string; loading: boolean } | null;
 
@@ -41,6 +42,8 @@ const VOL_MAX = 6;
 const PREAMP_MIN = -30;
 const PREAMP_MAX = 18;
 const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+/** Duration of the pad hit flash fade-out in milliseconds. */
+const PAD_FLASH_DURATION_MS = 600;
 
 const fmtDb = (db: number) =>
   Math.abs(db) < 0.05 ? "0.0" : `${db > 0 ? "+" : ""}${db.toFixed(1)}`;
@@ -211,34 +214,71 @@ function InlineRename({
 }
 
 // ---------------------------------------------------------------------------
-// Pad Grid (drop targets + rename)
+// Pad Grid (drop targets + rename + hit-flash animation)
 // ---------------------------------------------------------------------------
 
-function PadGrid({
-  activePads,
-  padStates,
-  padCustomNames,
-  showOriginalName,
-  onSampleDrop,
-  onDeletePad,
-  onRename,
-}: {
-  activePads: Set<number>;
+type PadGridHandle = { hit: (padIndex: number) => void };
+
+const PadGrid = forwardRef<PadGridHandle, {
   padStates: PadState[];
   padCustomNames: (string | null)[];
   showOriginalName: boolean;
   onSampleDrop: (padIndex: number, file: File) => void;
   onDeletePad: (padIndex: number) => void;
   onRename: (padIndex: number, name: string | null) => void;
-}) {
+}>(function PadGrid({
+  padStates,
+  padCustomNames,
+  showOriginalName,
+  onSampleDrop,
+  onDeletePad,
+  onRename,
+}, ref) {
   const [dragOverPad, setDragOverPad] = useState<number | null>(null);
   const [renamingPad, setRenamingPad] = useState<number | null>(null);
+
+  const padHitTimes = useRef<number[]>(Array(PAD_COUNT).fill(-Infinity));
+  const padElems = useRef<(HTMLDivElement | null)[]>(Array(PAD_COUNT).fill(null));
+  const rafId = useRef<number | null>(null);
+
+  const runRaf = useCallback(() => {
+    const now = performance.now();
+    let anyActive = false;
+    for (let i = 0; i < PAD_COUNT; i++) {
+      const el = padElems.current[i];
+      if (!el) continue;
+      const t = (now - padHitTimes.current[i]) / PAD_FLASH_DURATION_MS;
+      if (t < 1) {
+        anyActive = true;
+        const alpha = 1 - t;
+        el.style.borderColor = `rgba(91, 110, 245, ${alpha})`;
+        el.style.boxShadow = `0 0 ${alpha * 16}px rgba(91, 110, 245, ${alpha * 0.4})`;
+        el.style.backgroundColor = `rgba(91, 110, 245, ${alpha * 0.12})`;
+      } else if (padHitTimes.current[i] > -Infinity) {
+        el.style.borderColor = "";
+        el.style.boxShadow = "";
+        el.style.backgroundColor = "";
+        padHitTimes.current[i] = -Infinity;
+      }
+    }
+    rafId.current = anyActive ? requestAnimationFrame(runRaf) : null;
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    hit(padIndex: number) {
+      padHitTimes.current[padIndex] = performance.now();
+      if (rafId.current === null) {
+        rafId.current = requestAnimationFrame(runRaf);
+      }
+    },
+  }), [runRaf]);
+
+  useEffect(() => () => { if (rafId.current !== null) cancelAnimationFrame(rafId.current); }, []);
 
   return (
     <div className="pad-grid">
       {Array.from({ length: PAD_COUNT }, (_, i) => {
         const noteName = padNoteName(i);
-        const isActive = activePads.has(i);
         const isDragOver = dragOverPad === i;
         const pad = padStates[i];
         const customName = padCustomNames[i];
@@ -249,7 +289,8 @@ function PadGrid({
         return (
           <div
             key={i}
-            className={["pad", isActive ? "pad--active" : "", isDragOver ? "pad--drag-over" : "", pad?.loading ? "pad--loading" : ""].filter(Boolean).join(" ")}
+            ref={(el) => { padElems.current[i] = el; }}
+            className={["pad", isDragOver ? "pad--drag-over" : "", pad?.loading ? "pad--loading" : ""].filter(Boolean).join(" ")}
             title={`MIDI ${PAD_MIDI_BASE + i}`}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; if (dragOverPad !== i) setDragOverPad(i); }}
             onDragLeave={() => setDragOverPad(null)}
@@ -292,7 +333,7 @@ function PadGrid({
       })}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Mixer View
@@ -486,7 +527,7 @@ export default function App() {
   const [cacheDirOverride, setCacheDirOverride] = useState<string | null>(null);
   const [effectiveCacheDir, setEffectiveCacheDir] = useState<string>("");
   const [pluginVersion, setPluginVersion] = useState<string | null>(null);
-  const [activePads] = useState<Set<number>>(new Set());
+  const padGridRef = useRef<PadGridHandle>(null);
   const [padStates, setPadStates] = useState<PadState[]>(Array(PAD_COUNT).fill(null));
   const [baseVoices, setBaseVoices] = useState<16 | 32 | 64>(16);
   const [allowInfiniteVoices, setAllowInfiniteVoices] = useState(true);
@@ -548,6 +589,8 @@ export default function App() {
         setPadStates((prev) => { const next = [...prev]; next[msg.padIndex] = null; return next; });
       } else if (msg.type === "PadCleared") {
         setPadStates((prev) => { const next = [...prev]; next[msg.padIndex] = null; return next; });
+      } else if (msg.type === "PadHit") {
+        padGridRef.current?.hit(msg.padIndex);
       }
     };
 
@@ -648,6 +691,26 @@ export default function App() {
   const handleRetriggerChange = (enabled: boolean) => { setRetrigger(enabled); sendToPluginSafe({ type: "SetRetrigger", enabled }); };
   const handleRespectNoteOffsChange = (enabled: boolean) => { setRespectNoteOffs(enabled); sendToPluginSafe({ type: "SetRespectNoteOffs", enabled }); };
 
+  const handleDownloadNoteNames = () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 128; i++) {
+      const padIdx = i - PAD_MIDI_BASE;
+      if (padIdx >= 0 && padIdx < PAD_COUNT) {
+        const name = padCustomNames[padIdx] ?? padStates[padIdx]?.name ?? "";
+        lines.push(name);
+      } else {
+        lines.push("");
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "dispatch_note_names.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="app">
       <header className="app-header">
@@ -711,7 +774,7 @@ export default function App() {
       <main className="app-main">
         <div style={{ display: activeTab === "pads" ? "flex" : "none", width: "100%", height: "100%", alignItems: "stretch", justifyContent: "center" }}>
           <PadGrid
-            activePads={activePads}
+            ref={padGridRef}
             padStates={padStates}
             padCustomNames={padCustomNames}
             showOriginalName={showOriginalName}
@@ -748,6 +811,7 @@ export default function App() {
       <footer className="app-footer">
         <span className={`conn-dot ${connected ? "conn-dot--on" : ""}`} />
         <span>{connected ? "Connected" : "Connecting..."}</span>
+        <button className="footer-btn" onClick={handleDownloadNoteNames} title="Download Reaper-compatible note names (.txt)">note names ↓</button>
         <span className="footer-versions">plugin {pluginVersion ?? "—"} · gui {guiVersion}</span>
       </footer>
       {isOffline && (

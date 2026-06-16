@@ -30,10 +30,12 @@ use clap_sys::ext::gui::{
     CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
 };
 use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY};
+use clap_sys::ext::note_name::{clap_note_name, clap_plugin_note_name, CLAP_EXT_NOTE_NAME};
 use clap_sys::ext::note_ports::{
     clap_note_port_info, clap_plugin_note_ports, CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP,
     CLAP_NOTE_DIALECT_MIDI,
 };
+use clap_sys::string_sizes::CLAP_NAME_SIZE;
 use clap_sys::ext::params::{
     clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
     CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_BYPASS, CLAP_PARAM_IS_HIDDEN,
@@ -224,6 +226,8 @@ pub struct Wrapper<P: ClapPlugin> {
     output_parameter_events: ArrayQueue<OutputParamEvent>,
 
     host_thread_check: AtomicRefCell<Option<ClapPtr<clap_host_thread_check>>>,
+
+    clap_plugin_note_name: clap_plugin_note_name,
 
     clap_plugin_remote_controls: clap_plugin_remote_controls,
     /// The plugin's remote control pages, if it defines any. Filled when initializing the plugin.
@@ -644,6 +648,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             output_parameter_events: ArrayQueue::new(OUTPUT_EVENT_QUEUE_CAPACITY),
 
             host_thread_check: AtomicRefCell::new(None),
+
+            clap_plugin_note_name: clap_plugin_note_name {
+                count: Some(Self::ext_note_name_count),
+                get: Some(Self::ext_note_name_get),
+            },
 
             clap_plugin_remote_controls: clap_plugin_remote_controls {
                 count: Some(Self::ext_remote_controls_count),
@@ -2321,6 +2330,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             &wrapper.clap_plugin_gui as *const _ as *const c_void
         } else if id == CLAP_EXT_LATENCY {
             &wrapper.clap_plugin_latency as *const _ as *const c_void
+        } else if id == CLAP_EXT_NOTE_NAME && !wrapper.plugin.lock().clap_note_names().is_empty() {
+            &wrapper.clap_plugin_note_name as *const _ as *const c_void
         } else if id == CLAP_EXT_NOTE_PORTS
             && (P::MIDI_INPUT >= MidiConfig::Basic || P::MIDI_OUTPUT >= MidiConfig::Basic)
         {
@@ -3040,6 +3051,38 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         if !out.is_null() {
             wrapper.handle_out_events(&*out, 0, 0);
+        }
+    }
+
+    unsafe extern "C" fn ext_note_name_count(plugin: *const clap_plugin) -> u32 {
+        check_null_ptr!(0, plugin, (*plugin).plugin_data);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+        wrapper.plugin.lock().clap_note_names().len() as u32
+    }
+
+    unsafe extern "C" fn ext_note_name_get(
+        plugin: *const clap_plugin,
+        index: u32,
+        out: *mut clap_note_name,
+    ) -> bool {
+        check_null_ptr!(false, plugin, (*plugin).plugin_data, out);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+        let names = wrapper.plugin.lock().clap_note_names();
+        match names.get(index as usize) {
+            Some((name, key)) => {
+                let bytes = name.as_bytes();
+                let len = bytes.len().min(CLAP_NAME_SIZE - 1);
+                let name_buf = &mut (*out).name;
+                for (i, &b) in bytes[..len].iter().enumerate() {
+                    name_buf[i] = b as std::os::raw::c_char;
+                }
+                name_buf[len] = 0;
+                (*out).port = -1;
+                (*out).key = *key;
+                (*out).channel = -1;
+                true
+            }
+            None => false,
         }
     }
 

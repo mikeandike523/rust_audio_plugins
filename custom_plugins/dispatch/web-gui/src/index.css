@@ -699,6 +699,24 @@ body {
   box-shadow: 0 0 6px var(--green);
 }
 
+.footer-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.footer-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .footer-versions {
   margin-left: auto;
 }

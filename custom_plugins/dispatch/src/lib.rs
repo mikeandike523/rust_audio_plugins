@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 const GUI_WIDTH: u32 = 1140;
@@ -570,6 +570,10 @@ pub struct Dispatch {
     ui_events: Arc<Mutex<Vec<UiEvent>>>,
     ui_events_dirty: Arc<AtomicBool>,
 
+    /// Bitmask of pads that received a NoteOn this buffer. Written by the audio thread,
+    /// drained by the GUI thread to trigger flash animations. One bit per pad (pads 0–15).
+    pad_hit_bits: Arc<AtomicU16>,
+
     resample_in_progress: Arc<Vec<AtomicBool>>,
 }
 
@@ -588,6 +592,7 @@ impl Default for Dispatch {
             respect_note_offs: Arc::new(AtomicBool::new(true)),
             ui_events: Arc::new(Mutex::new(Vec::new())),
             ui_events_dirty: Arc::new(AtomicBool::new(false)),
+            pad_hit_bits: Arc::new(AtomicU16::new(0)),
             resample_in_progress: Arc::new(
                 (0..PAD_COUNT).map(|_| AtomicBool::new(false)).collect(),
             ),
@@ -804,6 +809,7 @@ impl Plugin for Dispatch {
                             let pad_idx = (n - PAD_MIDI_BASE) as usize;
                             if pad_idx < PAD_COUNT {
                                 self.trigger_pad(pad_idx, *velocity);
+                                self.pad_hit_bits.fetch_or(1u16 << pad_idx, Ordering::Relaxed);
                             }
                         }
                     }
@@ -859,12 +865,12 @@ impl Plugin for Dispatch {
                                 let fi = v.sample_pos * data.channels;
                                 let vol_db = self.params.pads[v.pad_index].volume.value();
                                 let preamp_db = pad_preamps[v.pad_index];
-                                let vol = 10f32.powf((vol_db + preamp_db) / 20.0);
+                                let preamp_gain = 10f32.powf(preamp_db / 20.0);
                                 let vel_gain = vel_floor + (1.0 - vel_floor) * v.velocity_gain;
-                                let gain = vel_gain * vol;
-                                let l_raw = data.data[fi] * gain;
+                                let drive_gain = vel_gain * preamp_gain;
+                                let l_raw = data.data[fi] * drive_gain;
                                 let r_raw = if data.channels > 1 {
-                                    data.data[fi + 1] * gain
+                                    data.data[fi + 1] * drive_gain
                                 } else {
                                     l_raw
                                 };
@@ -874,13 +880,14 @@ impl Plugin for Dispatch {
                                 } else {
                                     (l_raw, r_raw)
                                 };
-                                // Tanh soft saturation: smooth S-curve, transparent at low
-                                // levels, gradually limits toward ±1 for hot signals.
+                                // Tanh soft saturation driven by preamp only; volume applied after.
                                 let (l, r) = if pad_limiters[v.pad_index] {
                                     (l.tanh(), r.tanh())
                                 } else {
                                     (l, r)
                                 };
+                                let vol_gain = 10f32.powf(vol_db / 20.0);
+                                let (l, r) = (l * vol_gain, r * vol_gain);
                                 out[0] += l;
                                 out[1] += r;
                                 v.sample_pos += 1;
@@ -929,6 +936,7 @@ impl Plugin for Dispatch {
         let respect_note_offs = self.respect_note_offs.clone();
         let ui_events = self.ui_events.clone();
         let ui_events_dirty = self.ui_events_dirty.clone();
+        let pad_hit_bits = self.pad_hit_bits.clone();
         let resample_in_progress = self.resample_in_progress.clone();
         let params = self.params.clone();
 
@@ -1399,6 +1407,16 @@ impl Plugin for Dispatch {
                         }
                     }
                 }
+
+                // Forward pad NoteOn hits for flash animation
+                let hits = pad_hit_bits.swap(0, Ordering::Relaxed);
+                if hits != 0 {
+                    for i in 0..PAD_COUNT {
+                        if hits & (1u16 << i) != 0 {
+                            ctx.send_json(json!({ "type": "PadHit", "padIndex": i }));
+                        }
+                    }
+                }
             });
 
         Some(Box::new(editor))
@@ -1428,6 +1446,22 @@ impl ClapPlugin for Dispatch {
         ClapFeature::Sampler,
         ClapFeature::Stereo,
     ];
+
+    fn clap_note_names(&self) -> Vec<(String, i16)> {
+        let custom_names = self.params.pad_custom_names.lock().unwrap();
+        (0..PAD_COUNT)
+            .filter_map(|i| {
+                let midi_key = (PAD_MIDI_BASE as usize + i) as i16;
+                let custom = custom_names[i].clone();
+                let file_name = self.pad_data[i]
+                    .try_lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|d| d.name.clone()));
+                let name = custom.or(file_name)?;
+                Some((name, midi_key))
+            })
+            .collect()
+    }
 }
 
 nih_export_clap!(Dispatch);

@@ -25,6 +25,12 @@ pub trait ClapPlugin: Plugin {
     /// that the host can use to provide better hardware mapping for a plugin. See the linked
     /// extension for more information.
     fn remote_controls(&self, context: &mut impl RemoteControlsContext) {}
+
+    /// Return the note names this plugin exposes for the host's piano roll. Each entry is
+    /// `(display_name, midi_key)`. Return an empty vec (the default) to skip the extension.
+    fn clap_note_names(&self) -> Vec<(String, i16)> {
+        vec![]
+    }
 }
 
 /// Configuration for the plugin's polyphonic modulation options, if it supports .
