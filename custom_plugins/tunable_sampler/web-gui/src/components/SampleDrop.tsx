@@ -10,7 +10,7 @@ import {
   type MutableRefObject,
 } from "react";
 
-import type { SampleInfo } from "../types/appTypes";
+import { CHANNEL_MODES, type ChannelMode, type SampleInfo } from "../types/appTypes";
 import { clamp } from "../utils/audio";
 
 type SampleDropProps = {
@@ -25,6 +25,8 @@ type SampleDropProps = {
   onSampleEndChange: (value: number) => void;
   waveformContainerRef: MutableRefObject<HTMLDivElement | null>;
   waveformCanvasRef: MutableRefObject<HTMLCanvasElement | null>;
+  channelMode: ChannelMode;
+  onChannelModeChange: (mode: ChannelMode) => void;
 };
 
 export const SampleDrop = ({
@@ -39,6 +41,8 @@ export const SampleDrop = ({
   onSampleEndChange,
   waveformContainerRef,
   waveformCanvasRef,
+  channelMode,
+  onChannelModeChange,
 }: SampleDropProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -308,6 +312,32 @@ export const SampleDrop = ({
               </div>
             </div>
           ) : null}
+        </div>
+        <div
+          className="channel-mode-bar"
+          onClick={(event) => event.stopPropagation()}
+          role="group"
+          aria-label="Channel mode"
+        >
+          <span className="channel-mode-label">Channel</span>
+          <div className="channel-mode-buttons">
+            {CHANNEL_MODES.map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                className={`channel-led-btn${channelMode === mode.value ? " is-active" : ""}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onChannelModeChange(mode.value);
+                }}
+                aria-pressed={channelMode === mode.value}
+                title={`${mode.label} channel mode`}
+              >
+                <span className="channel-led" />
+                <span className="channel-led-text">{mode.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="sample-meta">
           <div className="sample-name">

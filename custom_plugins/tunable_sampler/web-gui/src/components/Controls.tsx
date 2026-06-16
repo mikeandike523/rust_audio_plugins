@@ -1,11 +1,18 @@
 import { useRef } from "react";
-import type { TuningStatus } from "../types/appTypes";
+import type { ChannelMode, TuningStatus } from "../types/appTypes";
 import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
 type ControlsProps = {
-  preamp: number | null;
-  onPreampChange: (value: number) => void;
-  onPreampReset: () => void;
+  channelMode: ChannelMode;
+  preampL: number | null;
+  onPreampLChange: (value: number) => void;
+  onPreampLReset: () => void;
+  preampR: number | null;
+  onPreampRChange: (value: number) => void;
+  onPreampRReset: () => void;
+  legacyPreamp: number | null;
+  onLegacyPreampChange: (value: number) => void;
+  onLegacyPreampReset: () => void;
   gain: number | null;
   onGainChange: (value: number) => void;
   detune: number | null;
@@ -36,9 +43,16 @@ type ControlsProps = {
 };
 
 export const Controls = ({
-  preamp,
-  onPreampChange,
-  onPreampReset,
+  channelMode,
+  preampL,
+  onPreampLChange,
+  onPreampLReset,
+  preampR,
+  onPreampRChange,
+  onPreampRReset,
+  legacyPreamp,
+  onLegacyPreampChange,
+  onLegacyPreampReset,
   gain,
   onGainChange,
   detune,
@@ -72,26 +86,73 @@ export const Controls = ({
   const sclStatus = tuningStatus?.scl_name ? tuningStatus.scl_name : "No SCL loaded";
   const kbmStatus = tuningStatus?.kbm_name ? tuningStatus.kbm_name : "No KBM loaded";
 
+  // The wrong-side preamp is greyed out (but kept visible) in Left/Right modes.
+  const leftDisabled = preampL === null || channelMode === 3;
+  const rightDisabled = preampR === null || channelMode === 2;
+  // The legacy global preamp only surfaces when an old project loaded a non-zero value.
+  const showLegacyPreamp = legacyPreamp !== null && Math.abs(legacyPreamp) >= 0.05;
+
   return (
   <section className="controls">
-    <div className="control">
-      <label htmlFor="preamp">Preamp</label>
+    <div className={`control${leftDisabled ? " is-disabled" : ""}`}>
+      <label htmlFor="preamp-l">Preamp L</label>
       <div className="control-row">
-        <div onDoubleClick={onPreampReset} title="Double-click to reset to 0 dB">
+        <div onDoubleClick={onPreampLReset} title="Double-click to reset to 0 dB">
           <input
-            id="preamp"
+            id="preamp-l"
             type="range"
             min="-30"
             max="15"
             step="0.1"
-            value={preamp ?? 0}
-            onChange={(e) => onPreampChange(Number(e.target.value))}
-            disabled={preamp === null}
+            value={preampL ?? 0}
+            onChange={(e) => onPreampLChange(Number(e.target.value))}
+            disabled={leftDisabled}
           />
         </div>
-        <span className="value">{preamp === null ? "—" : `${preamp >= 0 ? "+" : ""}${preamp.toFixed(1)} dB`}</span>
+        <span className="value">{preampL === null ? "—" : `${preampL >= 0 ? "+" : ""}${preampL.toFixed(1)} dB`}</span>
       </div>
     </div>
+
+    <div className={`control${rightDisabled ? " is-disabled" : ""}`}>
+      <label htmlFor="preamp-r">Preamp R</label>
+      <div className="control-row">
+        <div onDoubleClick={onPreampRReset} title="Double-click to reset to 0 dB">
+          <input
+            id="preamp-r"
+            type="range"
+            min="-30"
+            max="15"
+            step="0.1"
+            value={preampR ?? 0}
+            onChange={(e) => onPreampRChange(Number(e.target.value))}
+            disabled={rightDisabled}
+          />
+        </div>
+        <span className="value">{preampR === null ? "—" : `${preampR >= 0 ? "+" : ""}${preampR.toFixed(1)} dB`}</span>
+      </div>
+    </div>
+
+    {showLegacyPreamp && (
+      <div className="control control-legacy">
+        <label htmlFor="preamp-legacy" title="Global preamp from a project saved before L/R split. Reset to 0 dB to hide.">
+          Preamp · legacy
+        </label>
+        <div className="control-row">
+          <div onDoubleClick={onLegacyPreampReset} title="Double-click to reset to 0 dB (hides this control)">
+            <input
+              id="preamp-legacy"
+              type="range"
+              min="-30"
+              max="15"
+              step="0.1"
+              value={legacyPreamp ?? 0}
+              onChange={(e) => onLegacyPreampChange(Number(e.target.value))}
+            />
+          </div>
+          <span className="value">{legacyPreamp === null ? "—" : `${legacyPreamp >= 0 ? "+" : ""}${legacyPreamp.toFixed(1)} dB`}</span>
+        </div>
+      </div>
+    )}
 
     <div className="control">
       <label htmlFor="gain">Gain</label>

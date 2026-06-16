@@ -9,7 +9,10 @@ export type PluginMessage =
       resampleQualityPitch?: number | null;
       sampleStart?: number | null;
       sampleEnd?: number | null;
+      preampL?: number | null;
+      preampR?: number | null;
       preamp?: number | null;
+      channelMode?: number | null;
       gain?: number | null;
       detune?: number | null;
       attack?: number | null;
@@ -78,6 +81,16 @@ export type PluginMessage =
   | { type: "PitchDetected"; hz: number }
   | { type: "PitchNoResult" }
   | { type: "PitchEstimateError"; message: string };
+
+/** Channel routing mode: 0=Stereo, 1=MixMean, 2=Left, 3=Right. */
+export type ChannelMode = 0 | 1 | 2 | 3;
+
+export const CHANNEL_MODES = [
+  { value: 0 as ChannelMode, label: "STEREO" },
+  { value: 1 as ChannelMode, label: "MIX" },
+  { value: 2 as ChannelMode, label: "LEFT" },
+  { value: 3 as ChannelMode, label: "RIGHT" },
+] as const;
 
 export type SampleInfo = {
   name: string;

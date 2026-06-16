@@ -5,6 +5,19 @@ use crate::tuning::TuningFile;
 
 #[derive(Params)]
 pub struct TunableSamplerParams {
+    #[id = "preamp_l"]
+    pub preamp_l: FloatParam,
+    pub preamp_l_changed: Arc<AtomicBool>,
+    #[id = "preamp_r"]
+    pub preamp_r: FloatParam,
+    pub preamp_r_changed: Arc<AtomicBool>,
+    /// Channel routing mode: 0=Stereo, 1=MixMean, 2=Left, 3=Right.
+    #[persist = "channel_mode"]
+    pub channel_mode: Arc<Mutex<u32>>,
+    /// Legacy global preamp, retained for backward compatibility with projects saved
+    /// before preamp was split into L/R. Applied equally to both channels as a
+    /// post-routing scalar. Defaults to 0 dB (no effect); the UI only surfaces it when
+    /// a non-default value was loaded from an old project.
     #[id = "preamp"]
     pub preamp: FloatParam,
     pub preamp_changed: Arc<AtomicBool>,
@@ -59,6 +72,16 @@ pub struct TunableSamplerParams {
 
 impl Default for TunableSamplerParams {
     fn default() -> Self {
+        let preamp_l_changed = Arc::new(AtomicBool::new(false));
+        let preamp_l_changed_cb = preamp_l_changed.clone();
+        let preamp_l_callback = Arc::new(move |_: f32| {
+            preamp_l_changed_cb.store(true, Ordering::Relaxed);
+        });
+        let preamp_r_changed = Arc::new(AtomicBool::new(false));
+        let preamp_r_changed_cb = preamp_r_changed.clone();
+        let preamp_r_callback = Arc::new(move |_: f32| {
+            preamp_r_changed_cb.store(true, Ordering::Relaxed);
+        });
         let preamp_changed = Arc::new(AtomicBool::new(false));
         let preamp_changed_cb = preamp_changed.clone();
         let preamp_callback = Arc::new(move |_: f32| {
@@ -111,8 +134,35 @@ impl Default for TunableSamplerParams {
         });
 
         Self {
+            preamp_l: FloatParam::new(
+                "Preamp L",
+                0.0,
+                FloatRange::Linear {
+                    min: -30.0,
+                    max: 15.0,
+                },
+            )
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_step_size(0.1)
+            .with_unit(" dB")
+            .with_callback(preamp_l_callback),
+            preamp_l_changed,
+            preamp_r: FloatParam::new(
+                "Preamp R",
+                0.0,
+                FloatRange::Linear {
+                    min: -30.0,
+                    max: 15.0,
+                },
+            )
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_step_size(0.1)
+            .with_unit(" dB")
+            .with_callback(preamp_r_callback),
+            preamp_r_changed,
+            channel_mode: Arc::new(Mutex::new(0)),
             preamp: FloatParam::new(
-                "Preamp",
+                "Preamp (legacy)",
                 0.0,
                 FloatRange::Linear {
                     min: -30.0,

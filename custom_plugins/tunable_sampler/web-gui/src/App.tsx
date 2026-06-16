@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { sendToPluginSafe, useInitializedParam } from "./hooks/useInitializedParam";
 import { useLoadingTasks } from "./hooks/useLoadingTasks";
+import { useMixMeanCache } from "./hooks/useMixMeanCache";
 import { usePluginMessages } from "./hooks/usePluginMessages";
 import { useSampleLoader } from "./hooks/useSampleLoader";
 import { useWaveformCanvas } from "./hooks/useWaveformCanvas";
 import { clamp } from "./utils/audio";
 import { hzToNoteInfo, formatPitchReadout } from "./utils/pitch";
-import type { SampleInfo, TuningStatus } from "./types/appTypes";
+import type { ChannelMode, SampleInfo, TuningStatus } from "./types/appTypes";
+import type { WaveformDrawOptions } from "./utils/waveform";
 import { Controls } from "./components/Controls";
 import { Footer } from "./components/Footer";
 import { LoadingOverlay } from "./components/LoadingOverlay";
@@ -49,7 +51,10 @@ export default function App() {
     pollMs: null,
   });
 
-  const preampSendPayload = useCallback((value: number) => ({ type: "SetPreamp", value }), []);
+  const preampLSendPayload = useCallback((value: number) => ({ type: "SetPreampL", value }), []);
+  const preampRSendPayload = useCallback((value: number) => ({ type: "SetPreampR", value }), []);
+  const legacyPreampSendPayload = useCallback((value: number) => ({ type: "SetPreamp", value }), []);
+  const channelModeSendPayload = useCallback((value: number) => ({ type: "SetChannelMode", mode: value }), []);
   const gainSendPayload = useCallback((value: number) => ({ type: "SetGain", value }), []);
   const detuneSendPayload = useCallback((value: number) => ({ type: "SetDetune", value }), []);
   const sampleStartSendPayload = useCallback((value: number) => ({ type: "SetSampleStart", value }), []);
@@ -70,11 +75,35 @@ export default function App() {
   const polyphonySendPayload = useCallback((value: number) => ({ type: "SetPolyphony", voices: value }), []);
   const nudgeSendPayload = useCallback((value: boolean) => ({ type: "SetNudgeTo12Edo", enabled: value }), []);
 
-  const preampParam = useInitializedParam<number>({
+  const preampLParam = useInitializedParam<number>({
+    name: "preampL",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: preampLSendPayload,
+    pollMs: null,
+  });
+
+  const preampRParam = useInitializedParam<number>({
+    name: "preampR",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: preampRSendPayload,
+    pollMs: null,
+  });
+
+  const legacyPreampParam = useInitializedParam<number>({
     name: "preamp",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: preampSendPayload,
+    sendPayload: legacyPreampSendPayload,
+    pollMs: null,
+  });
+
+  const channelModeParam = useInitializedParam<number>({
+    name: "channelMode",
+    initialValue: 0,
+    requestPayload: requestStatePayload,
+    sendPayload: channelModeSendPayload,
     pollMs: null,
   });
 
@@ -220,7 +249,10 @@ export default function App() {
   usePluginMessages({
     pluginVersionParam,
     projectSampleRateParam,
-    preampParam,
+    preampLParam,
+    preampRParam,
+    legacyPreampParam,
+    channelModeParam,
     gainParam,
     detuneParam,
     attackParam,
@@ -270,7 +302,10 @@ export default function App() {
   const allParamsReady =
     pluginVersionParam.ready &&
     projectSampleRateParam.ready &&
-    preampParam.ready &&
+    preampLParam.ready &&
+    preampRParam.ready &&
+    legacyPreampParam.ready &&
+    channelModeParam.ready &&
     gainParam.ready &&
     detuneParam.ready &&
     attackParam.ready &&
@@ -292,12 +327,39 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [allParamsReady, requestStatePayload]);
 
+  const channelMode = (channelModeParam.value ?? 0) as ChannelMode;
+
+  const mixMeanData = useMixMeanCache({
+    audioBufferRef,
+    sampleInfo,
+    channelMode,
+    addTask,
+    removeTask,
+  });
+
+  const waveformDrawOptions = useMemo<WaveformDrawOptions>(
+    () => ({
+      channelMode,
+      preampLDb: preampLParam.value ?? 0,
+      preampRDb: preampRParam.value ?? 0,
+      legacyPreampDb: legacyPreampParam.value ?? 0,
+      mixMeanData,
+    }),
+    [
+      channelMode,
+      preampLParam.value,
+      preampRParam.value,
+      legacyPreampParam.value,
+      mixMeanData,
+    ],
+  );
+
   useWaveformCanvas({
     containerRef: waveformContainerRef,
     canvasRef: waveformCanvasRef,
     audioBufferRef,
     sampleInfo,
-    preampDb: preampParam.value ?? 0,
+    drawOptions: waveformDrawOptions,
   });
 
   const resetClipRange = useCallback(() => {
@@ -363,8 +425,13 @@ export default function App() {
   };
 
   const handleForceResample = () => sendToPluginSafe({ type: "ForceResample" });
-  const handlePreampChange = (value: number) => preampParam.setValue(clamp(value, -30, 15));
-  const handlePreampReset = () => preampParam.setValue(0);
+  const handlePreampLChange = (value: number) => preampLParam.setValue(clamp(value, -30, 15));
+  const handlePreampLReset = () => preampLParam.setValue(0);
+  const handlePreampRChange = (value: number) => preampRParam.setValue(clamp(value, -30, 15));
+  const handlePreampRReset = () => preampRParam.setValue(0);
+  const handleLegacyPreampChange = (value: number) => legacyPreampParam.setValue(clamp(value, -30, 15));
+  const handleLegacyPreampReset = () => legacyPreampParam.setValue(0);
+  const handleChannelModeChange = (value: number) => channelModeParam.setValue(value);
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
   const handleDetuneChange = (value: number) => detuneParam.setValue(clamp(value, -100, 100));
   const handleDetuneReset = () => detuneParam.setValue(0);
@@ -446,6 +513,8 @@ export default function App() {
         onSampleEndChange={handleSampleEndChange}
         waveformContainerRef={waveformContainerRef}
         waveformCanvasRef={waveformCanvasRef}
+        channelMode={channelMode}
+        onChannelModeChange={handleChannelModeChange}
       />
 
       <div className="info-strip">
@@ -515,9 +584,16 @@ export default function App() {
       </div>
 
       <Controls
-        preamp={preampParam.value}
-        onPreampChange={handlePreampChange}
-        onPreampReset={handlePreampReset}
+        channelMode={channelMode}
+        preampL={preampLParam.value}
+        onPreampLChange={handlePreampLChange}
+        onPreampLReset={handlePreampLReset}
+        preampR={preampRParam.value}
+        onPreampRChange={handlePreampRChange}
+        onPreampRReset={handlePreampRReset}
+        legacyPreamp={legacyPreampParam.value}
+        onLegacyPreampChange={handleLegacyPreampChange}
+        onLegacyPreampReset={handleLegacyPreampReset}
         gain={gainParam.value}
         onGainChange={handleGainChange}
         detune={detuneParam.value}

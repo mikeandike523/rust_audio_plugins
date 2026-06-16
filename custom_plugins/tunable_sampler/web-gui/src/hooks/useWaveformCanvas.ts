@@ -1,6 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 
-import { drawWaveform } from "../utils/waveform";
+import { drawWaveform, type WaveformDrawOptions } from "../utils/waveform";
 import type { SampleInfo } from "../types/appTypes";
 
 type UseWaveformCanvasOptions = {
@@ -8,7 +8,7 @@ type UseWaveformCanvasOptions = {
   canvasRef: MutableRefObject<HTMLCanvasElement | null>;
   audioBufferRef: MutableRefObject<AudioBuffer | null>;
   sampleInfo: SampleInfo | null;
-  preampDb: number;
+  drawOptions: WaveformDrawOptions;
 };
 
 export const useWaveformCanvas = ({
@@ -16,10 +16,12 @@ export const useWaveformCanvas = ({
   canvasRef,
   audioBufferRef,
   sampleInfo,
-  preampDb,
+  drawOptions,
 }: UseWaveformCanvasOptions) => {
-  const preampDbRef = useRef(preampDb);
-  preampDbRef.current = preampDb;
+  // Latest-options ref so the resize handler (registered once) always draws with
+  // the current channel mode / preamp values without re-subscribing observers.
+  const drawOptionsRef = useRef(drawOptions);
+  drawOptionsRef.current = drawOptions;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -36,7 +38,7 @@ export const useWaveformCanvas = ({
       if (canvas.height !== height) {
         canvas.height = height;
       }
-      drawWaveform(canvas, audioBufferRef.current, preampDbRef.current);
+      drawWaveform(canvas, audioBufferRef.current, drawOptionsRef.current);
     };
 
     let raf1 = 0;
@@ -79,10 +81,10 @@ export const useWaveformCanvas = ({
   }, [audioBufferRef, canvasRef, containerRef]);
 
   useEffect(() => {
-    drawWaveform(canvasRef.current, audioBufferRef.current, preampDb);
+    drawWaveform(canvasRef.current, audioBufferRef.current, drawOptions);
     const timeoutId = window.setTimeout(() => {
-      drawWaveform(canvasRef.current, audioBufferRef.current, preampDb);
+      drawWaveform(canvasRef.current, audioBufferRef.current, drawOptions);
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [audioBufferRef, canvasRef, sampleInfo, preampDb]);
+  }, [audioBufferRef, canvasRef, sampleInfo, drawOptions]);
 };

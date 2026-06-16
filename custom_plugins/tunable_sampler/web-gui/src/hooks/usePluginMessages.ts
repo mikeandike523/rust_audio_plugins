@@ -22,7 +22,10 @@ type InitializedParam<T> = {
 type UsePluginMessagesOptions = {
   pluginVersionParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
-  preampParam: InitializedParam<number>;
+  preampLParam: InitializedParam<number>;
+  preampRParam: InitializedParam<number>;
+  legacyPreampParam: InitializedParam<number>;
+  channelModeParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
   detuneParam: InitializedParam<number>;
   attackParam: InitializedParam<number>;
@@ -69,7 +72,10 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       const {
         pluginVersionParam,
         projectSampleRateParam,
-        preampParam,
+        preampLParam,
+        preampRParam,
+        legacyPreampParam,
+        channelModeParam,
         gainParam,
         detuneParam,
         attackParam,
@@ -142,10 +148,25 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         } else if (typeof message.sampleEnd === "number") {
           sampleEndParam.setFromPlugin(clamp(message.sampleEnd, 0, 1));
         }
+        if (message.preampL === null) {
+          preampLParam.setFromPlugin(null);
+        } else if (typeof message.preampL === "number") {
+          preampLParam.setFromPlugin(clamp(message.preampL, -30, 15));
+        }
+        if (message.preampR === null) {
+          preampRParam.setFromPlugin(null);
+        } else if (typeof message.preampR === "number") {
+          preampRParam.setFromPlugin(clamp(message.preampR, -30, 15));
+        }
         if (message.preamp === null) {
-          preampParam.setFromPlugin(null);
+          legacyPreampParam.setFromPlugin(null);
         } else if (typeof message.preamp === "number") {
-          preampParam.setFromPlugin(clamp(message.preamp, -30, 15));
+          legacyPreampParam.setFromPlugin(clamp(message.preamp, -30, 15));
+        }
+        if (message.channelMode === null) {
+          channelModeParam.setFromPlugin(null);
+        } else if (typeof message.channelMode === "number") {
+          channelModeParam.setFromPlugin(message.channelMode);
         }
         if (message.gain === null) {
           gainParam.setFromPlugin(null);
