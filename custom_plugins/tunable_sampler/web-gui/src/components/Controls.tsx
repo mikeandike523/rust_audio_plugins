@@ -4,15 +4,15 @@ import { RESAMPLE_QUALITY_OPTIONS } from "../constants";
 
 type ControlsProps = {
   channelMode: ChannelMode;
-  preampL: number | null;
-  onPreampLChange: (value: number) => void;
-  onPreampLReset: () => void;
-  preampR: number | null;
-  onPreampRChange: (value: number) => void;
-  onPreampRReset: () => void;
-  legacyPreamp: number | null;
-  onLegacyPreampChange: (value: number) => void;
-  onLegacyPreampReset: () => void;
+  boostL: number | null;
+  onBoostLChange: (value: number) => void;
+  onBoostLReset: () => void;
+  boostR: number | null;
+  onBoostRChange: (value: number) => void;
+  onBoostRReset: () => void;
+  preamp: number | null;
+  onPreampChange: (value: number) => void;
+  onPreampReset: () => void;
   gain: number | null;
   onGainChange: (value: number) => void;
   detune: number | null;
@@ -44,15 +44,15 @@ type ControlsProps = {
 
 export const Controls = ({
   channelMode,
-  preampL,
-  onPreampLChange,
-  onPreampLReset,
-  preampR,
-  onPreampRChange,
-  onPreampRReset,
-  legacyPreamp,
-  onLegacyPreampChange,
-  onLegacyPreampReset,
+  boostL,
+  onBoostLChange,
+  onBoostLReset,
+  boostR,
+  onBoostRChange,
+  onBoostRReset,
+  preamp,
+  onPreampChange,
+  onPreampReset,
   gain,
   onGainChange,
   detune,
@@ -86,73 +86,68 @@ export const Controls = ({
   const sclStatus = tuningStatus?.scl_name ? tuningStatus.scl_name : "No SCL loaded";
   const kbmStatus = tuningStatus?.kbm_name ? tuningStatus.kbm_name : "No KBM loaded";
 
-  // The wrong-side preamp is greyed out (but kept visible) in Left/Right modes.
-  const leftDisabled = preampL === null || channelMode === 3;
-  const rightDisabled = preampR === null || channelMode === 2;
-  // The legacy global preamp only surfaces when an old project loaded a non-zero value.
-  const showLegacyPreamp = legacyPreamp !== null && Math.abs(legacyPreamp) >= 0.05;
+  // The wrong-side boost is greyed out (but kept visible) in Left/Right modes.
+  const leftDisabled = boostL === null || channelMode === 3;
+  const rightDisabled = boostR === null || channelMode === 2;
 
   return (
   <section className="controls">
     <div className={`control${leftDisabled ? " is-disabled" : ""}`}>
-      <label htmlFor="preamp-l">Preamp L</label>
+      <label htmlFor="boost-l">LBoost</label>
       <div className="control-row">
-        <div onDoubleClick={onPreampLReset} title="Double-click to reset to 0 dB">
+        <div onDoubleClick={onBoostLReset} title="Left-channel boost (before mix). Double-click to reset to 0 dB">
           <input
-            id="preamp-l"
+            id="boost-l"
             type="range"
             min="-30"
             max="15"
             step="0.1"
-            value={preampL ?? 0}
-            onChange={(e) => onPreampLChange(Number(e.target.value))}
+            value={boostL ?? 0}
+            onChange={(e) => onBoostLChange(Number(e.target.value))}
             disabled={leftDisabled}
           />
         </div>
-        <span className="value">{preampL === null ? "—" : `${preampL >= 0 ? "+" : ""}${preampL.toFixed(1)} dB`}</span>
+        <span className="value">{boostL === null ? "—" : `${boostL >= 0 ? "+" : ""}${boostL.toFixed(1)} dB`}</span>
       </div>
     </div>
 
     <div className={`control${rightDisabled ? " is-disabled" : ""}`}>
-      <label htmlFor="preamp-r">Preamp R</label>
+      <label htmlFor="boost-r">RBoost</label>
       <div className="control-row">
-        <div onDoubleClick={onPreampRReset} title="Double-click to reset to 0 dB">
+        <div onDoubleClick={onBoostRReset} title="Right-channel boost (before mix). Double-click to reset to 0 dB">
           <input
-            id="preamp-r"
+            id="boost-r"
             type="range"
             min="-30"
             max="15"
             step="0.1"
-            value={preampR ?? 0}
-            onChange={(e) => onPreampRChange(Number(e.target.value))}
+            value={boostR ?? 0}
+            onChange={(e) => onBoostRChange(Number(e.target.value))}
             disabled={rightDisabled}
           />
         </div>
-        <span className="value">{preampR === null ? "—" : `${preampR >= 0 ? "+" : ""}${preampR.toFixed(1)} dB`}</span>
+        <span className="value">{boostR === null ? "—" : `${boostR >= 0 ? "+" : ""}${boostR.toFixed(1)} dB`}</span>
       </div>
     </div>
 
-    {showLegacyPreamp && (
-      <div className="control control-legacy">
-        <label htmlFor="preamp-legacy" title="Global preamp from a project saved before L/R split. Reset to 0 dB to hide.">
-          Preamp · legacy
-        </label>
-        <div className="control-row">
-          <div onDoubleClick={onLegacyPreampReset} title="Double-click to reset to 0 dB (hides this control)">
-            <input
-              id="preamp-legacy"
-              type="range"
-              min="-30"
-              max="15"
-              step="0.1"
-              value={legacyPreamp ?? 0}
-              onChange={(e) => onLegacyPreampChange(Number(e.target.value))}
-            />
-          </div>
-          <span className="value">{legacyPreamp === null ? "—" : `${legacyPreamp >= 0 ? "+" : ""}${legacyPreamp.toFixed(1)} dB`}</span>
+    <div className="control">
+      <label htmlFor="preamp" title="Global preamp applied after the mix stage">Preamp</label>
+      <div className="control-row">
+        <div onDoubleClick={onPreampReset} title="Double-click to reset to 0 dB">
+          <input
+            id="preamp"
+            type="range"
+            min="-30"
+            max="15"
+            step="0.1"
+            value={preamp ?? 0}
+            onChange={(e) => onPreampChange(Number(e.target.value))}
+            disabled={preamp === null}
+          />
         </div>
+        <span className="value">{preamp === null ? "—" : `${preamp >= 0 ? "+" : ""}${preamp.toFixed(1)} dB`}</span>
       </div>
-    )}
+    </div>
 
     <div className="control">
       <label htmlFor="gain">Gain</label>

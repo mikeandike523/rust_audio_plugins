@@ -189,8 +189,8 @@ impl TunableSampler {
             "pluginVersion": env!("CARGO_PKG_VERSION"),
             "effectiveCacheDir": effective_dir.to_string_lossy(),
             "cacheDirOverride": cache_dir_override,
-            "preampL": params.preamp_l.value(),
-            "preampR": params.preamp_r.value(),
+            "boostL": params.boost_l.value(),
+            "boostR": params.boost_r.value(),
             "preamp": params.preamp.value(),
             "channelMode": channel_mode,
             "gain": params.gain.value(),
@@ -542,38 +542,36 @@ impl Plugin for TunableSampler {
                 }
             }
 
-            // Advance both preamp smoothers every sample regardless of mode so they
-            // stay in lockstep with the audio clock.
-            let pre_l = util::db_to_gain_fast(self.params.preamp_l.smoothed.next());
-            let pre_r = util::db_to_gain_fast(self.params.preamp_r.smoothed.next());
-            // Legacy global preamp: a post-routing scalar applied equally to both
-            // channels, folded into the final gain. Defaults to 0 dB (unity) so it is
-            // inert for new projects but reproduces old projects' pre-split preamp.
-            let legacy_preamp = util::db_to_gain_fast(self.params.preamp.smoothed.next());
-            let gain = util::db_to_gain_fast(self.params.gain.smoothed.next()) * legacy_preamp;
+            // Advance both boost smoothers every sample regardless of mode so they
+            // stay in lockstep with the audio clock. LBoost/RBoost are applied to the
+            // L/R channels *before* the routing/mix stage.
+            let boost_l = util::db_to_gain_fast(self.params.boost_l.smoothed.next());
+            let boost_r = util::db_to_gain_fast(self.params.boost_r.smoothed.next());
+            // Preamp is a global scalar applied equally to both channels *after* the
+            // routing/mix stage; folded with the output gain. All operations are linear,
+            // so applying it to the summed voice output equals applying it per voice.
+            let preamp = util::db_to_gain_fast(self.params.preamp.smoothed.next());
+            let gain = util::db_to_gain_fast(self.params.gain.smoothed.next()) * preamp;
 
-            // Apply per-channel preamp, then route per channel mode. All operations are
-            // linear, so applying preamp to the summed voice output is equivalent to
-            // applying it per voice.
             let (out_l, out_r) = match channel_mode {
                 1 => {
-                    // MixMean: 0.5·(preL·L) + 0.5·(preR·R) to both channels.
-                    let c = out[0] * pre_l * 0.5 + out[1] * pre_r * 0.5;
+                    // MixMean: 0.5·(LBoost·L) + 0.5·(RBoost·R) to both channels.
+                    let c = out[0] * boost_l * 0.5 + out[1] * boost_r * 0.5;
                     (c, c)
                 }
                 2 => {
-                    // Left: preL·L to both channels.
-                    let l = out[0] * pre_l;
+                    // Left: LBoost·L to both channels.
+                    let l = out[0] * boost_l;
                     (l, l)
                 }
                 3 => {
-                    // Right: preR·R to both channels.
-                    let r = out[1] * pre_r;
+                    // Right: RBoost·R to both channels.
+                    let r = out[1] * boost_r;
                     (r, r)
                 }
                 _ => {
-                    // Stereo: preL·L → left, preR·R → right.
-                    (out[0] * pre_l, out[1] * pre_r)
+                    // Stereo: LBoost·L → left, RBoost·R → right.
+                    (out[0] * boost_l, out[1] * boost_r)
                 }
             };
 
@@ -715,19 +713,19 @@ impl Plugin for TunableSampler {
                                 setter.set_parameter(&params.gain, value);
                                 setter.end_set_parameter(&params.gain);
                             }
-                            Action::SetPreampL { value } => {
+                            Action::SetBoostL { value } => {
                                 let clamped = value.clamp(-30.0, 15.0);
-                                setter.begin_set_parameter(&params.preamp_l);
-                                setter.set_parameter(&params.preamp_l, clamped);
-                                setter.end_set_parameter(&params.preamp_l);
-                                params.preamp_l_changed.store(false, Ordering::Relaxed);
+                                setter.begin_set_parameter(&params.boost_l);
+                                setter.set_parameter(&params.boost_l, clamped);
+                                setter.end_set_parameter(&params.boost_l);
+                                params.boost_l_changed.store(false, Ordering::Relaxed);
                             }
-                            Action::SetPreampR { value } => {
+                            Action::SetBoostR { value } => {
                                 let clamped = value.clamp(-30.0, 15.0);
-                                setter.begin_set_parameter(&params.preamp_r);
-                                setter.set_parameter(&params.preamp_r, clamped);
-                                setter.end_set_parameter(&params.preamp_r);
-                                params.preamp_r_changed.store(false, Ordering::Relaxed);
+                                setter.begin_set_parameter(&params.boost_r);
+                                setter.set_parameter(&params.boost_r, clamped);
+                                setter.end_set_parameter(&params.boost_r);
+                                params.boost_r_changed.store(false, Ordering::Relaxed);
                             }
                             Action::SetPreamp { value } => {
                                 let clamped = value.clamp(-30.0, 15.0);
@@ -1023,16 +1021,16 @@ impl Plugin for TunableSampler {
                     }
                 }
 
-                if params.preamp_l_changed.swap(false, Ordering::Relaxed) {
+                if params.boost_l_changed.swap(false, Ordering::Relaxed) {
                     ctx.send_json(json!({
                         "type": "State",
-                        "preampL": params.preamp_l.value(),
+                        "boostL": params.boost_l.value(),
                     }));
                 }
-                if params.preamp_r_changed.swap(false, Ordering::Relaxed) {
+                if params.boost_r_changed.swap(false, Ordering::Relaxed) {
                     ctx.send_json(json!({
                         "type": "State",
-                        "preampR": params.preamp_r.value(),
+                        "boostR": params.boost_r.value(),
                     }));
                 }
                 if params.preamp_changed.swap(false, Ordering::Relaxed) {

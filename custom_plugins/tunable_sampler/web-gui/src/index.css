@@ -477,10 +477,6 @@ body {
   opacity: 0.4;
 }
 
-.control-legacy label {
-  color: var(--accent-dark);
-}
-
 /* ── Channel mode selector (skeuomorphic sampler LEDs) ─────────────────── */
 .channel-mode-bar {
   display: flex;

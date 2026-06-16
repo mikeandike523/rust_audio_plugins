@@ -5,19 +5,20 @@ use crate::tuning::TuningFile;
 
 #[derive(Params)]
 pub struct TunableSamplerParams {
-    #[id = "preamp_l"]
-    pub preamp_l: FloatParam,
-    pub preamp_l_changed: Arc<AtomicBool>,
-    #[id = "preamp_r"]
-    pub preamp_r: FloatParam,
-    pub preamp_r_changed: Arc<AtomicBool>,
+    /// Per-channel left boost applied to the L channel *before* the routing/mix stage.
+    #[id = "boost_l"]
+    pub boost_l: FloatParam,
+    pub boost_l_changed: Arc<AtomicBool>,
+    /// Per-channel right boost applied to the R channel *before* the routing/mix stage.
+    #[id = "boost_r"]
+    pub boost_r: FloatParam,
+    pub boost_r_changed: Arc<AtomicBool>,
     /// Channel routing mode: 0=Stereo, 1=MixMean, 2=Left, 3=Right.
     #[persist = "channel_mode"]
     pub channel_mode: Arc<Mutex<u32>>,
-    /// Legacy global preamp, retained for backward compatibility with projects saved
-    /// before preamp was split into L/R. Applied equally to both channels as a
-    /// post-routing scalar. Defaults to 0 dB (no effect); the UI only surfaces it when
-    /// a non-default value was loaded from an old project.
+    /// Global preamp applied equally to both channels *after* the routing/mix stage.
+    /// Keeps `#[id = "preamp"]` so projects saved before the L/R boost split load their
+    /// preamp value straight into this control.
     #[id = "preamp"]
     pub preamp: FloatParam,
     pub preamp_changed: Arc<AtomicBool>,
@@ -72,15 +73,15 @@ pub struct TunableSamplerParams {
 
 impl Default for TunableSamplerParams {
     fn default() -> Self {
-        let preamp_l_changed = Arc::new(AtomicBool::new(false));
-        let preamp_l_changed_cb = preamp_l_changed.clone();
-        let preamp_l_callback = Arc::new(move |_: f32| {
-            preamp_l_changed_cb.store(true, Ordering::Relaxed);
+        let boost_l_changed = Arc::new(AtomicBool::new(false));
+        let boost_l_changed_cb = boost_l_changed.clone();
+        let boost_l_callback = Arc::new(move |_: f32| {
+            boost_l_changed_cb.store(true, Ordering::Relaxed);
         });
-        let preamp_r_changed = Arc::new(AtomicBool::new(false));
-        let preamp_r_changed_cb = preamp_r_changed.clone();
-        let preamp_r_callback = Arc::new(move |_: f32| {
-            preamp_r_changed_cb.store(true, Ordering::Relaxed);
+        let boost_r_changed = Arc::new(AtomicBool::new(false));
+        let boost_r_changed_cb = boost_r_changed.clone();
+        let boost_r_callback = Arc::new(move |_: f32| {
+            boost_r_changed_cb.store(true, Ordering::Relaxed);
         });
         let preamp_changed = Arc::new(AtomicBool::new(false));
         let preamp_changed_cb = preamp_changed.clone();
@@ -134,8 +135,8 @@ impl Default for TunableSamplerParams {
         });
 
         Self {
-            preamp_l: FloatParam::new(
-                "Preamp L",
+            boost_l: FloatParam::new(
+                "LBoost",
                 0.0,
                 FloatRange::Linear {
                     min: -30.0,
@@ -145,10 +146,10 @@ impl Default for TunableSamplerParams {
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.1)
             .with_unit(" dB")
-            .with_callback(preamp_l_callback),
-            preamp_l_changed,
-            preamp_r: FloatParam::new(
-                "Preamp R",
+            .with_callback(boost_l_callback),
+            boost_l_changed,
+            boost_r: FloatParam::new(
+                "RBoost",
                 0.0,
                 FloatRange::Linear {
                     min: -30.0,
@@ -158,11 +159,11 @@ impl Default for TunableSamplerParams {
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_step_size(0.1)
             .with_unit(" dB")
-            .with_callback(preamp_r_callback),
-            preamp_r_changed,
+            .with_callback(boost_r_callback),
+            boost_r_changed,
             channel_mode: Arc::new(Mutex::new(0)),
             preamp: FloatParam::new(
-                "Preamp (legacy)",
+                "Preamp",
                 0.0,
                 FloatRange::Linear {
                     min: -30.0,

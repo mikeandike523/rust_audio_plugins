@@ -8,10 +8,11 @@ const LABEL_FG = "#f4ece1";
 
 export type WaveformDrawOptions = {
   channelMode: ChannelMode;
-  preampLDb: number;
-  preampRDb: number;
-  /** Legacy global preamp (post-routing scalar); folded into both channels. */
-  legacyPreampDb: number;
+  /** Per-channel boosts applied before the routing/mix stage. */
+  boostLDb: number;
+  boostRDb: number;
+  /** Global preamp (post-routing scalar); folded into both channels. */
+  preampDb: number;
   /** Pre-computed (L+R)*0.5 mono mix, length = frame count. Only needed for MixMean. */
   mixMeanData: Float32Array | null;
 };
@@ -96,9 +97,9 @@ export const drawWaveform = (
   const left = audioBuffer.getChannelData(0);
   const right = numCh > 1 ? audioBuffer.getChannelData(1) : left;
 
-  const { channelMode, preampLDb, preampRDb, legacyPreampDb, mixMeanData } = options;
-  const gL = dbToGain(preampLDb + legacyPreampDb);
-  const gR = dbToGain(preampRDb + legacyPreampDb);
+  const { channelMode, boostLDb, boostRDb, preampDb, mixMeanData } = options;
+  const gL = dbToGain(boostLDb + preampDb);
+  const gR = dbToGain(boostRDb + preampDb);
 
   switch (channelMode) {
     case 0: {

@@ -51,9 +51,9 @@ export default function App() {
     pollMs: null,
   });
 
-  const preampLSendPayload = useCallback((value: number) => ({ type: "SetPreampL", value }), []);
-  const preampRSendPayload = useCallback((value: number) => ({ type: "SetPreampR", value }), []);
-  const legacyPreampSendPayload = useCallback((value: number) => ({ type: "SetPreamp", value }), []);
+  const boostLSendPayload = useCallback((value: number) => ({ type: "SetBoostL", value }), []);
+  const boostRSendPayload = useCallback((value: number) => ({ type: "SetBoostR", value }), []);
+  const preampSendPayload = useCallback((value: number) => ({ type: "SetPreamp", value }), []);
   const channelModeSendPayload = useCallback((value: number) => ({ type: "SetChannelMode", mode: value }), []);
   const gainSendPayload = useCallback((value: number) => ({ type: "SetGain", value }), []);
   const detuneSendPayload = useCallback((value: number) => ({ type: "SetDetune", value }), []);
@@ -75,27 +75,27 @@ export default function App() {
   const polyphonySendPayload = useCallback((value: number) => ({ type: "SetPolyphony", voices: value }), []);
   const nudgeSendPayload = useCallback((value: boolean) => ({ type: "SetNudgeTo12Edo", enabled: value }), []);
 
-  const preampLParam = useInitializedParam<number>({
-    name: "preampL",
+  const boostLParam = useInitializedParam<number>({
+    name: "boostL",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: preampLSendPayload,
+    sendPayload: boostLSendPayload,
     pollMs: null,
   });
 
-  const preampRParam = useInitializedParam<number>({
-    name: "preampR",
+  const boostRParam = useInitializedParam<number>({
+    name: "boostR",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: preampRSendPayload,
+    sendPayload: boostRSendPayload,
     pollMs: null,
   });
 
-  const legacyPreampParam = useInitializedParam<number>({
+  const preampParam = useInitializedParam<number>({
     name: "preamp",
     initialValue: 0,
     requestPayload: requestStatePayload,
-    sendPayload: legacyPreampSendPayload,
+    sendPayload: preampSendPayload,
     pollMs: null,
   });
 
@@ -249,9 +249,9 @@ export default function App() {
   usePluginMessages({
     pluginVersionParam,
     projectSampleRateParam,
-    preampLParam,
-    preampRParam,
-    legacyPreampParam,
+    boostLParam,
+    boostRParam,
+    preampParam,
     channelModeParam,
     gainParam,
     detuneParam,
@@ -302,9 +302,9 @@ export default function App() {
   const allParamsReady =
     pluginVersionParam.ready &&
     projectSampleRateParam.ready &&
-    preampLParam.ready &&
-    preampRParam.ready &&
-    legacyPreampParam.ready &&
+    boostLParam.ready &&
+    boostRParam.ready &&
+    preampParam.ready &&
     channelModeParam.ready &&
     gainParam.ready &&
     detuneParam.ready &&
@@ -340,16 +340,16 @@ export default function App() {
   const waveformDrawOptions = useMemo<WaveformDrawOptions>(
     () => ({
       channelMode,
-      preampLDb: preampLParam.value ?? 0,
-      preampRDb: preampRParam.value ?? 0,
-      legacyPreampDb: legacyPreampParam.value ?? 0,
+      boostLDb: boostLParam.value ?? 0,
+      boostRDb: boostRParam.value ?? 0,
+      preampDb: preampParam.value ?? 0,
       mixMeanData,
     }),
     [
       channelMode,
-      preampLParam.value,
-      preampRParam.value,
-      legacyPreampParam.value,
+      boostLParam.value,
+      boostRParam.value,
+      preampParam.value,
       mixMeanData,
     ],
   );
@@ -425,12 +425,12 @@ export default function App() {
   };
 
   const handleForceResample = () => sendToPluginSafe({ type: "ForceResample" });
-  const handlePreampLChange = (value: number) => preampLParam.setValue(clamp(value, -30, 15));
-  const handlePreampLReset = () => preampLParam.setValue(0);
-  const handlePreampRChange = (value: number) => preampRParam.setValue(clamp(value, -30, 15));
-  const handlePreampRReset = () => preampRParam.setValue(0);
-  const handleLegacyPreampChange = (value: number) => legacyPreampParam.setValue(clamp(value, -30, 15));
-  const handleLegacyPreampReset = () => legacyPreampParam.setValue(0);
+  const handleBoostLChange = (value: number) => boostLParam.setValue(clamp(value, -30, 15));
+  const handleBoostLReset = () => boostLParam.setValue(0);
+  const handleBoostRChange = (value: number) => boostRParam.setValue(clamp(value, -30, 15));
+  const handleBoostRReset = () => boostRParam.setValue(0);
+  const handlePreampChange = (value: number) => preampParam.setValue(clamp(value, -30, 15));
+  const handlePreampReset = () => preampParam.setValue(0);
   const handleChannelModeChange = (value: number) => channelModeParam.setValue(value);
   const handleGainChange = (value: number) => gainParam.setValue(clamp(value, -24, 24));
   const handleDetuneChange = (value: number) => detuneParam.setValue(clamp(value, -100, 100));
@@ -585,15 +585,15 @@ export default function App() {
 
       <Controls
         channelMode={channelMode}
-        preampL={preampLParam.value}
-        onPreampLChange={handlePreampLChange}
-        onPreampLReset={handlePreampLReset}
-        preampR={preampRParam.value}
-        onPreampRChange={handlePreampRChange}
-        onPreampRReset={handlePreampRReset}
-        legacyPreamp={legacyPreampParam.value}
-        onLegacyPreampChange={handleLegacyPreampChange}
-        onLegacyPreampReset={handleLegacyPreampReset}
+        boostL={boostLParam.value}
+        onBoostLChange={handleBoostLChange}
+        onBoostLReset={handleBoostLReset}
+        boostR={boostRParam.value}
+        onBoostRChange={handleBoostRChange}
+        onBoostRReset={handleBoostRReset}
+        preamp={preampParam.value}
+        onPreampChange={handlePreampChange}
+        onPreampReset={handlePreampReset}
         gain={gainParam.value}
         onGainChange={handleGainChange}
         detune={detuneParam.value}

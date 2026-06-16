@@ -22,9 +22,9 @@ type InitializedParam<T> = {
 type UsePluginMessagesOptions = {
   pluginVersionParam: InitializedParam<string>;
   projectSampleRateParam: InitializedParam<number>;
-  preampLParam: InitializedParam<number>;
-  preampRParam: InitializedParam<number>;
-  legacyPreampParam: InitializedParam<number>;
+  boostLParam: InitializedParam<number>;
+  boostRParam: InitializedParam<number>;
+  preampParam: InitializedParam<number>;
   channelModeParam: InitializedParam<number>;
   gainParam: InitializedParam<number>;
   detuneParam: InitializedParam<number>;
@@ -72,9 +72,9 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
       const {
         pluginVersionParam,
         projectSampleRateParam,
-        preampLParam,
-        preampRParam,
-        legacyPreampParam,
+        boostLParam,
+        boostRParam,
+        preampParam,
         channelModeParam,
         gainParam,
         detuneParam,
@@ -148,20 +148,20 @@ export const usePluginMessages = (options: UsePluginMessagesOptions) => {
         } else if (typeof message.sampleEnd === "number") {
           sampleEndParam.setFromPlugin(clamp(message.sampleEnd, 0, 1));
         }
-        if (message.preampL === null) {
-          preampLParam.setFromPlugin(null);
-        } else if (typeof message.preampL === "number") {
-          preampLParam.setFromPlugin(clamp(message.preampL, -30, 15));
+        if (message.boostL === null) {
+          boostLParam.setFromPlugin(null);
+        } else if (typeof message.boostL === "number") {
+          boostLParam.setFromPlugin(clamp(message.boostL, -30, 15));
         }
-        if (message.preampR === null) {
-          preampRParam.setFromPlugin(null);
-        } else if (typeof message.preampR === "number") {
-          preampRParam.setFromPlugin(clamp(message.preampR, -30, 15));
+        if (message.boostR === null) {
+          boostRParam.setFromPlugin(null);
+        } else if (typeof message.boostR === "number") {
+          boostRParam.setFromPlugin(clamp(message.boostR, -30, 15));
         }
         if (message.preamp === null) {
-          legacyPreampParam.setFromPlugin(null);
+          preampParam.setFromPlugin(null);
         } else if (typeof message.preamp === "number") {
-          legacyPreampParam.setFromPlugin(clamp(message.preamp, -30, 15));
+          preampParam.setFromPlugin(clamp(message.preamp, -30, 15));
         }
         if (message.channelMode === null) {
           channelModeParam.setFromPlugin(null);
